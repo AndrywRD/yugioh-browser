@@ -1640,24 +1640,36 @@ export default function HomePage() {
       : interaction.kind === "fusion_selectMaterials" || interaction.kind === "fusion_chooseResultSlot"
         ? "FUSION"
         : null;
+  const prioritizingBoardSlotClick =
+    interaction.kind === "summon_selectSlot" ||
+    interaction.kind === "setMonster_selectSlot" ||
+    interaction.kind === "setSpellTrap_selectSlot" ||
+    interaction.kind === "fusion_chooseResultSlot" ||
+    interaction.kind === "equipFromHand_selectTarget" ||
+    interaction.kind === "equipSet_selectTarget";
+  const compactMatchHeader = showMatch;
 
   const positionStateMonster =
     snapshot && interaction.kind === "position_choose" ? snapshot.you.monsterZone[interaction.slotIndex] : null;
 
   return (
-    <main className="fm-screen fm-noise-overlay mx-auto flex h-screen min-h-screen w-full max-w-none flex-col gap-3 overflow-hidden p-4">
-      <header className="fm-panel shrink-0 px-4 py-3">
+    <main
+      className={`fm-screen fm-noise-overlay mx-auto flex h-screen min-h-screen w-full max-w-none flex-col overflow-hidden ${
+        compactMatchHeader ? "gap-2 p-2" : "gap-3 p-4"
+      }`}
+    >
+      <header className={`fm-panel shrink-0 ${compactMatchHeader ? "px-3 py-2" : "px-4 py-3"}`}>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h1 className="fm-title text-xl font-bold">Ruptura Arcana</h1>
-            <p className="fm-subtitle text-xs">
+            <h1 className={`fm-title font-bold ${compactMatchHeader ? "text-lg" : "text-xl"}`}>Ruptura Arcana</h1>
+            <p className={`fm-subtitle ${compactMatchHeader ? "text-[11px]" : "text-xs"}`}>
               Socket: {connected ? "conectado" : "desconectado"} {playerId ? `| PlayerId: ${playerId}` : ""}
             </p>
           </div>
           <button
             type="button"
             onClick={goBackToLobby}
-            className="fm-button rounded-lg px-3 py-2 text-xs font-semibold"
+            className={`fm-button rounded-lg font-semibold ${compactMatchHeader ? "px-2.5 py-1.5 text-[11px]" : "px-3 py-2 text-xs"}`}
           >
             Voltar ao Lobby
           </button>
@@ -1791,34 +1803,9 @@ export default function HomePage() {
         <section
           className={`grid min-h-0 flex-1 gap-3 overflow-visible ${showLogPanel ? "lg:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-1"}`}
         >
-          <div className="fm-panel fm-frame relative flex min-h-0 flex-col gap-2 overflow-visible p-3">
-            <HintsBar
-              yourTurn={isMyTurn}
-              phase={snapshot.turn.phase}
-              turnNumber={snapshot.turn.turnNumber}
-              mainActionUsed={snapshot.you.usedSummonOrFuseThisTurn}
-              waitingPrompt={inputLockedByCombat}
-            />
-
-            <div className="absolute right-3 top-3 z-tooltip flex flex-col gap-1.5">
-              <button
-                type="button"
-                onClick={() => setShowLogPanel((current) => !current)}
-                className="fm-button rounded-md px-2 py-1 text-[11px] font-semibold"
-              >
-                {showLogPanel ? "Fechar Log" : "Abrir Log"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowFusionLogModal(true)}
-                className="fm-button rounded-md px-2 py-1 text-[11px] font-semibold"
-              >
-                Fusion Log
-              </button>
-            </div>
-
+          <div className="fm-panel fm-frame relative flex min-h-0 flex-col gap-1 overflow-visible p-2">
             <div className="relative min-h-0 flex-1 overflow-visible">
-              <LogTicker lines={tickerLines} className="top-4" />
+              <LogTicker lines={tickerLines} className="top-[58px]" />
               <div className="relative z-board h-full">
                 <BoardStage
                   playerMonsters={playerMonsters}
@@ -1879,7 +1866,34 @@ export default function HomePage() {
                 />
               </div>
               <HudLayer>
-                <LpHudImage youLp={snapshot.you.lp} opponentLp={snapshot.opponent.lp} opponentHandCount={snapshot.opponent.handCount} className="top-2 right-2" />
+                <div className="pointer-events-auto absolute left-2 top-2 z-tooltip w-[min(620px,calc(100%-230px))]">
+                  <HintsBar
+                    yourTurn={isMyTurn}
+                    phase={snapshot.turn.phase}
+                    turnNumber={snapshot.turn.turnNumber}
+                    mainActionUsed={snapshot.you.usedSummonOrFuseThisTurn}
+                    waitingPrompt={inputLockedByCombat}
+                  />
+                </div>
+
+                <div className="pointer-events-auto absolute right-2 top-2 z-tooltip flex flex-col items-end gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowLogPanel((current) => !current)}
+                    className="fm-button inline-flex w-auto rounded-md px-2 py-1 text-[11px] font-semibold"
+                  >
+                    {showLogPanel ? "Fechar Log" : "Abrir Log"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowFusionLogModal(true)}
+                    className="fm-button inline-flex w-auto rounded-md px-2 py-1 text-[11px] font-semibold"
+                  >
+                    Fusion Log
+                  </button>
+                </div>
+
+                <LpHudImage youLp={snapshot.you.lp} opponentLp={snapshot.opponent.lp} opponentHandCount={snapshot.opponent.handCount} className="top-11 right-2" />
                 <HintBanner text={hintBannerText} visible={showHintBanner} />
                 <EndTurnButton
                   enabled={isMyTurn}
@@ -1981,8 +1995,16 @@ export default function HomePage() {
 
               <CardPreview card={previewSelection} dimmed={Boolean(targetingMode)} />
 
-              <div className="pointer-events-none absolute inset-x-0 bottom-[18px] z-hand mx-auto w-full max-w-[1320px] overflow-visible px-3">
-                <div className="mx-auto h-[210px] w-full max-w-[1040px] overflow-visible">
+              <div
+                className={`pointer-events-none absolute inset-x-0 z-hand mx-auto w-full max-w-[1520px] overflow-visible px-2 transition-all ${
+                  prioritizingBoardSlotClick ? "bottom-[-34px] opacity-95" : "bottom-[-26px]"
+                }`}
+              >
+                <div
+                  className={`mx-auto w-full max-w-[1140px] overflow-visible ${
+                    prioritizingBoardSlotClick ? "pointer-events-none h-[172px]" : "h-[184px]"
+                  }`}
+                >
                   <HandFan
                     cards={handCards}
                     selectedIds={selectedHandIds}

@@ -48,10 +48,10 @@ export function HandFan({ cards, selectedIds, highlightedIds, badgeById, onCardC
   };
 
   return (
-    <div className="pointer-events-auto h-full w-full overflow-visible px-2 pb-2 pt-3">
+    <div className="pointer-events-auto h-full w-full overflow-visible px-2 pb-1 pt-1">
       <div className="h-full w-full overflow-x-auto overflow-y-visible [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         <div
-          className="relative mx-auto flex h-full min-w-max items-end pb-4 pt-6"
+          className="relative mx-auto flex h-full min-w-max items-end pb-1 pt-3"
           style={{
             width: railWidth > 0 ? `${railWidth}px` : "100%"
           }}
@@ -61,7 +61,7 @@ export function HandFan({ cards, selectedIds, highlightedIds, badgeById, onCardC
             const highlighted = highlightedIds?.includes(card.instanceId) ?? false;
             const isHovered = hoveredId === card.instanceId;
             const angle = useOverlap ? Math.max(-10, Math.min(10, (index - fanCenter) * 2.2)) : 0;
-            const liftY = selected ? -36 : isHovered ? -32 : 22;
+            const liftY = selected ? -34 : isHovered ? -30 : 8;
             const scale = selected ? 1.05 : isHovered ? 1.04 : 1;
             const marginLeft = index === 0 ? 0 : useOverlap ? -overlap : BASE_GAP;
             return (
