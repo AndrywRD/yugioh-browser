@@ -39,8 +39,32 @@ import { PersistenceService } from "./services/persistenceService";
 
 const PORT = Number(process.env.PORT ?? 3333);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
-const ALLOWED_ORIGINS = WEB_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+const EXPLICIT_ALLOWED_ORIGINS = WEB_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+const DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];
+const ALLOWED_ORIGINS = Array.from(new Set([...DEFAULT_ALLOWED_ORIGINS, ...EXPLICIT_ALLOWED_ORIGINS]));
 const PLAYER_HEADER = "x-player-public-id";
+
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.includes("*")) return true;
+  if (ALLOWED_ORIGINS.includes(origin)) return true;
+
+  // Deploy safety net for Render preview/static domains.
+  if (/^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin)) {
+    return true;
+  }
+
+  // Local testing safety net.
+  if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
+    return true;
+  }
+
+  return false;
+}
+
+function corsOriginHandler(origin: string | undefined, callback: (error: Error | null, allow: boolean) => void): void {
+  callback(null, isAllowedOrigin(origin));
+}
 
 const app = Fastify({
   logger: true
@@ -48,7 +72,7 @@ const app = Fastify({
 
 const io = new Server(app.server, {
   cors: {
-    origin: ALLOWED_ORIGINS,
+    origin: corsOriginHandler,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
   }
 });
@@ -442,7 +466,7 @@ async function startMatch(room: RuntimeRoom): Promise<void> {
 }
 
 await app.register(cors, {
-  origin: ALLOWED_ORIGINS,
+  origin: corsOriginHandler,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 });
 

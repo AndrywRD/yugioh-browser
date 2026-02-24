@@ -10,6 +10,19 @@ function buildUrl(path: string): string {
   return `${SERVER_URL}${path}`;
 }
 
+async function fetchWithNetworkHint(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(buildUrl(path), init);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(
+        "Falha de conexao com o servidor. Verifique NEXT_PUBLIC_SERVER_URL no frontend e WEB_ORIGIN no backend."
+      );
+    }
+    throw error;
+  }
+}
+
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const payload = (await response.json().catch(() => ({}))) as { message?: string };
   if (!response.ok) {
@@ -199,7 +212,7 @@ export interface FusionTestResult {
 }
 
 export async function registerAccount(input: { login: string; password: string; username?: string }): Promise<{ player: PlayerProfile; publicId: string }> {
-  const response = await fetch(buildUrl("/api/auth/register"), {
+  const response = await fetchWithNetworkHint("/api/auth/register", {
     method: "POST",
     headers: {
       "content-type": "application/json"
@@ -210,7 +223,7 @@ export async function registerAccount(input: { login: string; password: string; 
 }
 
 export async function loginAccount(input: { login: string; password: string }): Promise<{ player: PlayerProfile; publicId: string }> {
-  const response = await fetch(buildUrl("/api/auth/login"), {
+  const response = await fetchWithNetworkHint("/api/auth/login", {
     method: "POST",
     headers: {
       "content-type": "application/json"
@@ -221,7 +234,7 @@ export async function loginAccount(input: { login: string; password: string }): 
 }
 
 export async function helloPlayer(input: { publicId?: string; username?: string }): Promise<{ player: PlayerProfile; publicId: string }> {
-  const response = await fetch(buildUrl("/api/player/hello"), {
+  const response = await fetchWithNetworkHint("/api/player/hello", {
     method: "POST",
     headers: {
       "content-type": "application/json"
