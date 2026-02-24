@@ -78,9 +78,7 @@ export function CardMenu({ anchorRect, items }: CardMenuProps) {
       }}
     >
       <div className="relative h-full w-[280px] max-w-[82vw] drop-shadow-[0_22px_36px_rgba(0,0,0,0.7)]">
-        <img src="/ui/menu_context_frame.png" alt="" aria-hidden className="absolute inset-0 h-full w-full object-fill" />
-
-        <div className="fm-scroll absolute inset-x-[7%] inset-y-[9%] flex flex-col gap-1.5 overflow-y-auto px-2.5 py-2">
+        <div className="fm-scroll fm-panel absolute inset-0 flex flex-col gap-1.5 overflow-y-auto rounded-xl px-3 py-3">
           {items.map((item) => (
             <button
               key={item.key}

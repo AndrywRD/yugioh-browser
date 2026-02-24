@@ -4,7 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { CARD_INDEX } from "@ruptura-arcana/game";
-import { fetchPlayerProfile, fetchPveNpcs, getStoredPublicId, startPveMatch, type PlayerProfile, type PveNpc } from "../../lib/api";
+import {
+  fetchPlayerProfile,
+  fetchPveDropProgress,
+  fetchPveNpcs,
+  getStoredPublicId,
+  startPveMatch,
+  type PlayerProfile,
+  type PveDropProgress,
+  type PveNpc
+} from "../../lib/api";
 import { HudStage } from "../../components/ui/HudStage";
 
 function unlockText(npc: PveNpc): string {
@@ -69,6 +78,7 @@ export default function PvePage() {
   const [loading, setLoading] = useState(true);
   const [player, setPlayer] = useState<PlayerProfile | null>(null);
   const [npcs, setNpcs] = useState<PveNpc[]>([]);
+  const [dropProgressByNpcId, setDropProgressByNpcId] = useState<Record<string, PveDropProgress>>({});
   const [busyNpcId, setBusyNpcId] = useState<string | null>(null);
   const [portraitIndexByNpcId, setPortraitIndexByNpcId] = useState<Record<string, number>>({});
   const [error, setError] = useState("");
@@ -84,8 +94,14 @@ export default function PvePage() {
         }
         const profile = await fetchPlayerProfile(publicId);
         setPlayer(profile);
-        const rows = await fetchPveNpcs(publicId);
+        const [rows, dropProgress] = await Promise.all([fetchPveNpcs(publicId), fetchPveDropProgress(publicId).catch(() => [])]);
         setNpcs(rows);
+        setDropProgressByNpcId(
+          dropProgress.reduce<Record<string, PveDropProgress>>((acc, row) => {
+            acc[row.npcId] = row;
+            return acc;
+          }, {})
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Falha ao carregar campanha PVE.");
       } finally {
@@ -178,20 +194,34 @@ export default function PvePage() {
                     </div>
                     <p className="mt-1 text-xs text-slate-300">Recompensa base: {npc.rewardGold} gold</p>
                     <p className="mt-1 text-xs text-slate-400">Desbloqueio: {unlockText(npc)}</p>
+                    <div className="mt-2 rounded border border-cyan-500/35 bg-cyan-950/20 px-2 py-1.5 text-[11px] text-cyan-100">
+                      {(() => {
+                        const tracker = dropProgressByNpcId[npc.id];
+                        if (!tracker) {
+                          return "Tracker de drops: sem dados ainda.";
+                        }
+                        return `Tracker de drops: ${tracker.obtainedCount}/${tracker.totalPossible} obtidas | faltam ${tracker.missingCount}.`;
+                      })()}
+                    </div>
                     <div className="fm-chip mt-2 rounded p-2">
                       <div className="flex items-center justify-between">
                         <p className="text-[11px] font-semibold text-slate-200">Drops</p>
                         <p className="text-[10px] text-slate-400">{npc.rewardCards.length} possiveis</p>
                       </div>
                       <ul className="mt-1 max-h-32 space-y-1 overflow-y-auto pr-1 text-[11px] text-slate-300">
-                        {npc.rewardCards.map((drop) => (
-                          <li key={`${npc.id}-${drop.cardId}`} className="fm-chip flex items-center justify-between gap-3 rounded px-1.5 py-1">
+                        {npc.rewardCards.map((drop) => {
+                          const tracker = dropProgressByNpcId[npc.id];
+                          const owned = Boolean(tracker?.obtainedCardIds.includes(drop.cardId));
+                          return (
+                            <li key={`${npc.id}-${drop.cardId}`} className="fm-chip flex items-center justify-between gap-3 rounded px-1.5 py-1">
                             <span className="truncate">{CARD_INDEX[drop.cardId]?.name ?? drop.cardId}</span>
-                            <span className="shrink-0 text-cyan-200">
+                            <span className={`shrink-0 ${owned ? "text-emerald-200" : "text-cyan-200"}`}>
                               {Math.round(drop.chance * 100)}% - x{drop.minCount}-{drop.maxCount}
                             </span>
+                            <span className="shrink-0 text-[10px] text-slate-300">{owned ? "obtida" : "faltando"}</span>
                           </li>
-                        ))}
+                          );
+                        })}
                         {npc.rewardCards.length === 0 && <li>Sem drop configurado.</li>}
                       </ul>
                     </div>

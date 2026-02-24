@@ -13,6 +13,23 @@ import type { Deck, DeckCardEntry, FusionDiscovery } from "@ruptura-arcana/share
 import { Prisma, PrismaClient, ShopPurchaseSource } from "@prisma/client";
 import { STARTER_BASE_GOLD, buildStarterData } from "../data/starter";
 import { buildFmNpcCatalog, type FmNpcDefinition, type NpcRewardDrop, type UnlockRequirement } from "../pve/fmNpcCatalog";
+import {
+  ACHIEVEMENT_CATALOG,
+  BASE_DECK_SLOT_LIMIT,
+  DAILY_MISSION_CATALOG,
+  buildDailyMissionSet,
+  buildLevelProgress,
+  levelFromXp,
+  resolveAchievementProgress,
+  type DailyMissionCategory,
+  type LevelProgressView,
+  type PlayerProgressMetrics,
+  type ProgressEventKey,
+  xpRewardForPveLoss,
+  xpRewardForPveWin,
+  xpRewardForPvpLoss,
+  xpRewardForPvpWin
+} from "../progression/progressionConfig";
 
 type CollectionEntry = {
   cardId: string;
@@ -34,8 +51,48 @@ type PlayerSummary = {
   publicId: string;
   username: string;
   gold: number;
+  xp: number;
+  level: number;
+  lifetimeXp: number;
+  achievementPoints: number;
+  deckSlotLimit: number;
+  activeTitle: string | null;
   winsPve: number;
   winsPvp: number;
+};
+
+type PlayerAchievementView = {
+  key: string;
+  title: string;
+  description: string;
+  rewardGold: number;
+  rewardXp: number;
+  rewardDeckSlots: number;
+  rewardTitle: string | null;
+  progressSnapshot: number;
+  unlockedAt: number;
+};
+
+type PlayerDailyMissionView = {
+  key: string;
+  title: string;
+  description: string;
+  category: DailyMissionCategory;
+  target: number;
+  progress: number;
+  rewardGold: number;
+  rewardXp: number;
+  claimed: boolean;
+  missionDate: string;
+};
+
+type ProgressionSummary = {
+  player: PlayerSummary;
+  levelProgress: LevelProgressView;
+  achievements: PlayerAchievementView[];
+  availableAchievements: number;
+  dailyMissions: PlayerDailyMissionView[];
+  missionDate: string;
 };
 
 type DeckListSummary = {
@@ -62,6 +119,17 @@ type PveNpcView = {
 type PveResultSummary = {
   rewardGold: number;
   rewardCards: Array<{ cardId: string; count: number }>;
+};
+
+type PveDropProgressView = {
+  npcId: string;
+  npcName: string;
+  tier: number;
+  totalPossible: number;
+  obtainedCount: number;
+  missingCount: number;
+  obtainedCardIds: string[];
+  missingCardIds: string[];
 };
 
 type ShopOfferSegment = "INICIANTE" | "INTERMEDIARIO" | "AVANCADO";
@@ -644,9 +712,23 @@ const SMALL_NPC_DROP_POOL_MAX_TARGET = 24;
 const LARGE_NPC_EXTRA_POOL_MIN = 4;
 const LARGE_NPC_EXTRA_POOL_MAX = 10;
 const RECENT_DROP_MEMORY = 8;
+const PVE_GOLD_REWARD_MULTIPLIER = 0.5;
+const SHOP_PURCHASE_XP_GAIN = 18;
+const BOOSTER_CARD_XP_GAIN = 12;
+const FUSION_DISCOVERY_XP_GAIN = 68;
+const FUSION_REPEAT_XP_GAIN = 0;
+
+function buildMissionDate(now = Date.now()): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function scalePveGoldReward(baseReward: number): number {
+  if (!Number.isFinite(baseReward) || baseReward <= 0) return 0;
+  return Math.max(1, Math.floor(baseReward * PVE_GOLD_REWARD_MULTIPLIER));
 }
 
 function costWeightForTier(cost: number | undefined, tier: number): number {
@@ -837,6 +919,7 @@ export class PersistenceService {
   private readonly fmNpcs: FmNpcDefinition[];
   private readonly missingNpcCards: string[];
   private readonly tierRewardPools: Map<number, NpcRewardDrop[]>;
+  private readonly dailyMissionCatalogByKey = new Map(DAILY_MISSION_CATALOG.map((mission) => [mission.key, mission]));
 
   constructor(private readonly prisma: PrismaClient) {
     const fmBuild = buildFmNpcCatalog();
@@ -863,6 +946,334 @@ export class PersistenceService {
         cost: pack.cost,
         cards: pack.cards
       }))
+    };
+  }
+
+  private async ensureDailyMissionsForPlayer(
+    tx: Prisma.TransactionClient,
+    playerId: string,
+    missionDate = buildMissionDate()
+  ) {
+    const existing = await tx.playerDailyMission.findMany({
+      where: {
+        playerId,
+        missionDate
+      }
+    });
+
+    const existingByKey = new Map(existing.map((mission) => [mission.missionKey, mission]));
+    const missionSet = buildDailyMissionSet(playerId, missionDate);
+
+    for (const definition of missionSet) {
+      if (existingByKey.has(definition.key)) continue;
+      const created = await tx.playerDailyMission.create({
+        data: {
+          playerId,
+          missionDate,
+          missionKey: definition.key,
+          title: definition.title,
+          description: definition.description,
+          category: definition.category,
+          target: definition.target,
+          progress: 0,
+          rewardGold: definition.rewardGold,
+          rewardXp: definition.rewardXp
+        }
+      });
+      existingByKey.set(created.missionKey, created);
+    }
+
+    return Array.from(existingByKey.values()).sort((left, right) => left.missionKey.localeCompare(right.missionKey));
+  }
+
+  private toDailyMissionView(row: {
+    missionKey: string;
+    title: string;
+    description: string;
+    category: string;
+    target: number;
+    progress: number;
+    rewardGold: number;
+    rewardXp: number;
+    claimedAt: Date | null;
+    missionDate: string;
+  }): PlayerDailyMissionView {
+    return {
+      key: row.missionKey,
+      title: row.title,
+      description: row.description,
+      category: (row.category as DailyMissionCategory) ?? "GENERAL",
+      target: row.target,
+      progress: Math.min(row.target, Math.max(0, row.progress)),
+      rewardGold: row.rewardGold,
+      rewardXp: row.rewardXp,
+      claimed: Boolean(row.claimedAt),
+      missionDate: row.missionDate
+    };
+  }
+
+  private toAchievementView(row: {
+    achievementKey: string;
+    title: string;
+    description: string;
+    rewardGold: number;
+    rewardXp: number;
+    rewardDeckSlots: number;
+    rewardTitle: string | null;
+    progressSnapshot: number;
+    unlockedAt: Date;
+  }): PlayerAchievementView {
+    return {
+      key: row.achievementKey,
+      title: row.title,
+      description: row.description,
+      rewardGold: row.rewardGold,
+      rewardXp: row.rewardXp,
+      rewardDeckSlots: row.rewardDeckSlots,
+      rewardTitle: row.rewardTitle ?? null,
+      progressSnapshot: row.progressSnapshot,
+      unlockedAt: row.unlockedAt.getTime()
+    };
+  }
+
+  private async grantXp(
+    tx: Prisma.TransactionClient,
+    playerId: string,
+    xpGain: number
+  ): Promise<{ levelBefore: number; levelAfter: number }> {
+    const normalizedGain = Math.max(0, Math.floor(xpGain));
+    if (normalizedGain <= 0) {
+      const current = await tx.player.findUnique({
+        where: { id: playerId },
+        select: { level: true }
+      });
+      return {
+        levelBefore: current?.level ?? 1,
+        levelAfter: current?.level ?? 1
+      };
+    }
+
+    const player = await tx.player.findUnique({
+      where: { id: playerId },
+      select: {
+        xp: true,
+        level: true,
+        lifetimeXp: true
+      }
+    });
+    if (!player) {
+      throw new Error("Player nao encontrado.");
+    }
+
+    const nextXp = player.xp + normalizedGain;
+    const nextLifetimeXp = player.lifetimeXp + normalizedGain;
+    const computedLevel = levelFromXp(nextXp);
+    const gainedLevels = Math.max(0, computedLevel - player.level);
+    const levelUpGoldBonus = gainedLevels > 0 ? gainedLevels * 55 : 0;
+
+    await tx.player.update({
+      where: { id: playerId },
+      data: {
+        xp: nextXp,
+        lifetimeXp: nextLifetimeXp,
+        level: computedLevel,
+        gold: levelUpGoldBonus > 0 ? { increment: levelUpGoldBonus } : undefined,
+        lastSeenAt: new Date()
+      }
+    });
+
+    return {
+      levelBefore: player.level,
+      levelAfter: computedLevel
+    };
+  }
+
+  private async appendDailyMissionProgress(
+    tx: Prisma.TransactionClient,
+    playerId: string,
+    eventKey: ProgressEventKey,
+    amount = 1
+  ): Promise<void> {
+    const normalizedAmount = Math.max(0, Math.floor(amount));
+    if (normalizedAmount <= 0) return;
+    const missionDate = buildMissionDate();
+    const missions = await this.ensureDailyMissionsForPlayer(tx, playerId, missionDate);
+
+    for (const mission of missions) {
+      if (mission.claimedAt) continue;
+      const definition = this.dailyMissionCatalogByKey.get(mission.missionKey);
+      if (!definition || definition.eventKey !== eventKey) continue;
+      if (mission.progress >= mission.target) continue;
+
+      const nextProgress = Math.min(mission.target, mission.progress + normalizedAmount);
+      await tx.playerDailyMission.update({
+        where: { id: mission.id },
+        data: {
+          progress: nextProgress
+        }
+      });
+    }
+  }
+
+  private async buildProgressMetrics(tx: Prisma.TransactionClient, playerId: string): Promise<PlayerProgressMetrics> {
+    const [player, uniqueCards, fusionsDiscovered, totalMatches] = await Promise.all([
+      tx.player.findUnique({
+        where: { id: playerId },
+        select: {
+          winsPve: true,
+          winsPvp: true,
+          level: true,
+          gold: true
+        }
+      }),
+      tx.playerCard.count({
+        where: {
+          playerId,
+          count: { gt: 0 }
+        }
+      }),
+      tx.fusionDiscovery.count({
+        where: { playerId }
+      }),
+      tx.matchHistory.count({
+        where: { playerId }
+      })
+    ]);
+
+    if (!player) {
+      throw new Error("Player nao encontrado.");
+    }
+
+    return {
+      winsPve: player.winsPve,
+      winsPvp: player.winsPvp,
+      level: player.level,
+      gold: player.gold,
+      uniqueCards,
+      fusionsDiscovered,
+      totalMatches
+    };
+  }
+
+  private async evaluateAchievements(tx: Prisma.TransactionClient, playerId: string): Promise<PlayerAchievementView[]> {
+    const unlockedRows = await tx.playerAchievement.findMany({
+      where: { playerId },
+      select: {
+        achievementKey: true
+      }
+    });
+    const unlockedKeys = new Set(unlockedRows.map((row) => row.achievementKey));
+    const newlyUnlocked: PlayerAchievementView[] = [];
+
+    for (let guard = 0; guard < 4; guard += 1) {
+      const metrics = await this.buildProgressMetrics(tx, playerId);
+      const pending = ACHIEVEMENT_CATALOG.filter((achievement) => !unlockedKeys.has(achievement.key)).filter((achievement) => {
+        const progress = resolveAchievementProgress(achievement.requirement, metrics);
+        return progress >= achievement.requirement.target;
+      });
+
+      if (pending.length === 0) break;
+
+      let rewardGold = 0;
+      let rewardXp = 0;
+      let rewardDeckSlots = 0;
+      let rewardTitle: string | null = null;
+      const unlockDate = new Date();
+
+      for (const achievement of pending) {
+        const progressSnapshot = resolveAchievementProgress(achievement.requirement, metrics);
+        const created = await tx.playerAchievement.create({
+          data: {
+            playerId,
+            achievementKey: achievement.key,
+            title: achievement.title,
+            description: achievement.description,
+            rewardGold: achievement.rewardGold,
+            rewardXp: achievement.rewardXp,
+            rewardDeckSlots: achievement.rewardDeckSlots ?? 0,
+            rewardTitle: achievement.rewardTitle ?? null,
+            progressSnapshot,
+            unlockedAt: unlockDate
+          }
+        });
+
+        unlockedKeys.add(achievement.key);
+        rewardGold += achievement.rewardGold;
+        rewardXp += achievement.rewardXp;
+        rewardDeckSlots += achievement.rewardDeckSlots ?? 0;
+        if (achievement.rewardTitle) rewardTitle = achievement.rewardTitle;
+        newlyUnlocked.push(this.toAchievementView(created));
+      }
+
+      await tx.player.update({
+        where: { id: playerId },
+        data: {
+          gold: rewardGold > 0 ? { increment: rewardGold } : undefined,
+          achievementPoints: { increment: pending.reduce((sum, item) => sum + item.score, 0) },
+          deckSlotLimit: rewardDeckSlots > 0 ? { increment: rewardDeckSlots } : undefined,
+          activeTitle: rewardTitle ?? undefined,
+          lastSeenAt: new Date()
+        }
+      });
+
+      if (rewardXp > 0) {
+        await this.grantXp(tx, playerId, rewardXp);
+      }
+    }
+
+    return newlyUnlocked;
+  }
+
+  private async applyProgressEvents(
+    tx: Prisma.TransactionClient,
+    playerId: string,
+    events: Array<{ key: ProgressEventKey; amount?: number }>
+  ): Promise<void> {
+    for (const event of events) {
+      await this.appendDailyMissionProgress(tx, playerId, event.key, event.amount ?? 1);
+    }
+  }
+
+  private async buildProgressionSummaryByPlayerId(
+    tx: Prisma.TransactionClient,
+    playerId: string
+  ): Promise<ProgressionSummary> {
+    const [player, achievements, dailyMissionRows] = await Promise.all([
+      tx.player.findUnique({
+        where: { id: playerId },
+        select: {
+          id: true,
+          publicId: true,
+          username: true,
+          gold: true,
+          xp: true,
+          level: true,
+          lifetimeXp: true,
+          achievementPoints: true,
+          deckSlotLimit: true,
+          activeTitle: true,
+          winsPve: true,
+          winsPvp: true
+        }
+      }),
+      tx.playerAchievement.findMany({
+        where: { playerId },
+        orderBy: [{ unlockedAt: "desc" }, { title: "asc" }]
+      }),
+      this.ensureDailyMissionsForPlayer(tx, playerId, buildMissionDate())
+    ]);
+
+    if (!player) {
+      throw new Error("Player nao encontrado.");
+    }
+
+    return {
+      player: this.toPlayerSummary(player),
+      levelProgress: buildLevelProgress(player.xp, player.lifetimeXp),
+      achievements: achievements.map((row) => this.toAchievementView(row)),
+      availableAchievements: ACHIEVEMENT_CATALOG.length,
+      dailyMissions: dailyMissionRows.map((row) => this.toDailyMissionView(row)),
+      missionDate: buildMissionDate()
     };
   }
 
@@ -931,6 +1342,12 @@ export class PersistenceService {
     publicId: string;
     username: string;
     gold: number;
+    xp?: number;
+    level?: number;
+    lifetimeXp?: number;
+    achievementPoints?: number;
+    deckSlotLimit?: number;
+    activeTitle?: string | null;
     winsPve: number;
     winsPvp: number;
   }): PlayerSummary {
@@ -939,6 +1356,12 @@ export class PersistenceService {
       publicId: player.publicId,
       username: player.username,
       gold: player.gold,
+      xp: Math.max(0, Math.floor(player.xp ?? 0)),
+      level: Math.max(1, Math.floor(player.level ?? levelFromXp(player.xp ?? 0))),
+      lifetimeXp: Math.max(0, Math.floor(player.lifetimeXp ?? player.xp ?? 0)),
+      achievementPoints: Math.max(0, Math.floor(player.achievementPoints ?? 0)),
+      deckSlotLimit: Math.max(BASE_DECK_SLOT_LIMIT, Math.floor(player.deckSlotLimit ?? BASE_DECK_SLOT_LIMIT)),
+      activeTitle: player.activeTitle ?? null,
       winsPve: player.winsPve,
       winsPvp: player.winsPvp
     };
@@ -1281,6 +1704,12 @@ export class PersistenceService {
       await tx.fusionDiscovery.deleteMany({
         where: { playerId: player.id }
       });
+      await tx.playerAchievement.deleteMany({
+        where: { playerId: player.id }
+      });
+      await tx.playerDailyMission.deleteMany({
+        where: { playerId: player.id }
+      });
       await tx.playerCard.deleteMany({
         where: { playerId: player.id }
       });
@@ -1321,6 +1750,12 @@ export class PersistenceService {
         where: { id: player.id },
         data: {
           gold: STARTER_BASE_GOLD,
+          xp: 0,
+          level: 1,
+          lifetimeXp: 0,
+          achievementPoints: 0,
+          deckSlotLimit: BASE_DECK_SLOT_LIMIT,
+          activeTitle: null,
           winsPve: 0,
           winsPvp: 0,
           lastSeenAt: new Date()
@@ -1350,6 +1785,63 @@ export class PersistenceService {
       }
     });
     return this.toPlayerSummary(player);
+  }
+
+  async getProgression(publicId: string): Promise<ProgressionSummary> {
+    const playerId = await this.resolvePlayerId(publicId);
+    return this.prisma.$transaction((tx) => this.buildProgressionSummaryByPlayerId(tx, playerId));
+  }
+
+  async claimDailyMission(publicId: string, missionKey: string): Promise<ProgressionSummary> {
+    const playerId = await this.resolvePlayerId(publicId);
+    const normalizedKey = String(missionKey ?? "").trim();
+    if (!normalizedKey) {
+      throw new Error("missionKey obrigatorio.");
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const missionDate = buildMissionDate();
+      await this.ensureDailyMissionsForPlayer(tx, playerId, missionDate);
+
+      const mission = await tx.playerDailyMission.findFirst({
+        where: {
+          playerId,
+          missionDate,
+          missionKey: normalizedKey
+        }
+      });
+      if (!mission) {
+        throw new Error("Missao nao encontrada para hoje.");
+      }
+      if (mission.claimedAt) {
+        throw new Error("Missao ja resgatada.");
+      }
+      if (mission.progress < mission.target) {
+        throw new Error("Missao ainda nao concluida.");
+      }
+
+      await tx.playerDailyMission.update({
+        where: { id: mission.id },
+        data: {
+          claimedAt: new Date()
+        }
+      });
+
+      await tx.player.update({
+        where: { id: playerId },
+        data: {
+          gold: { increment: mission.rewardGold },
+          lastSeenAt: new Date()
+        }
+      });
+
+      if (mission.rewardXp > 0) {
+        await this.grantXp(tx, playerId, mission.rewardXp);
+      }
+
+      await this.evaluateAchievements(tx, playerId);
+      return this.buildProgressionSummaryByPlayerId(tx, playerId);
+    });
   }
 
   private async resolvePlayerRecord(publicId: string) {
@@ -1391,6 +1883,10 @@ export class PersistenceService {
   async saveDeck(publicId: string, deck: Deck): Promise<DeckListSummary> {
     const player = await this.resolvePlayerRecord(publicId);
     const existing = player.decks.find((item) => item.id === deck.id) ?? null;
+    const deckLimit = Math.max(BASE_DECK_SLOT_LIMIT, player.deckSlotLimit ?? BASE_DECK_SLOT_LIMIT);
+    if (!existing && player.decks.length >= deckLimit) {
+      throw new Error(`Limite de decks atingido (${deckLimit}). Desbloqueie novos slots com conquistas.`);
+    }
     const hasActive = player.decks.some((item) => item.isActive);
     const normalizedName = deck.name.trim() || "Deck sem nome";
     const normalizedCards = sanitizeDeckEntries(deck.cards);
@@ -1562,6 +2058,12 @@ export class PersistenceService {
           publicId: true,
           username: true,
           gold: true,
+          xp: true,
+          level: true,
+          lifetimeXp: true,
+          achievementPoints: true,
+          deckSlotLimit: true,
+          activeTitle: true,
           winsPve: true,
           winsPvp: true,
           cards: {
@@ -1584,8 +2086,6 @@ export class PersistenceService {
       if (player.gold < selectedOffer.price) {
         throw new Error("Gold insuficiente para esta compra.");
       }
-
-      const updatedGold = player.gold - selectedOffer.price;
 
       const goldUpdate = await tx.player.updateMany({
         where: {
@@ -1636,16 +2136,34 @@ export class PersistenceService {
         }
       });
 
+      await this.grantXp(tx, player.id, SHOP_PURCHASE_XP_GAIN);
+      await this.applyProgressEvents(tx, player.id, [{ key: "SHOP_BUY", amount: 1 }]);
+      await this.evaluateAchievements(tx, player.id);
+
+      const refreshedPlayer = await tx.player.findUnique({
+        where: { id: player.id },
+        select: {
+          id: true,
+          publicId: true,
+          username: true,
+          gold: true,
+          xp: true,
+          level: true,
+          lifetimeXp: true,
+          achievementPoints: true,
+          deckSlotLimit: true,
+          activeTitle: true,
+          winsPve: true,
+          winsPvp: true
+        }
+      });
+      if (!refreshedPlayer) {
+        throw new Error("Player nao encontrado.");
+      }
+
       const card = CARD_INDEX[normalizedCardId];
       return {
-        player: this.toPlayerSummary({
-          id: player.id,
-          publicId: player.publicId,
-          username: player.username,
-          gold: updatedGold,
-          winsPve: player.winsPve,
-          winsPvp: player.winsPvp
-        }),
+        player: this.toPlayerSummary(refreshedPlayer),
         purchased: {
           cardId: normalizedCardId,
           name: card?.name ?? normalizedCardId,
@@ -1665,6 +2183,12 @@ export class PersistenceService {
           publicId: true,
           username: true,
           gold: true,
+          xp: true,
+          level: true,
+          lifetimeXp: true,
+          achievementPoints: true,
+          deckSlotLimit: true,
+          activeTitle: true,
           winsPve: true,
           winsPvp: true,
           cards: {
@@ -1738,6 +2262,12 @@ export class PersistenceService {
           publicId: true,
           username: true,
           gold: true,
+          xp: true,
+          level: true,
+          lifetimeXp: true,
+          achievementPoints: true,
+          deckSlotLimit: true,
+          activeTitle: true,
           winsPve: true,
           winsPvp: true,
           cards: {
@@ -1830,15 +2360,33 @@ export class PersistenceService {
         });
       }
 
+      await this.grantXp(tx, player.id, BOOSTER_CARD_XP_GAIN * rewards.length);
+      await this.applyProgressEvents(tx, player.id, [{ key: "SHOP_BUY", amount: 1 }]);
+      await this.evaluateAchievements(tx, player.id);
+
+      const refreshedPlayer = await tx.player.findUnique({
+        where: { id: player.id },
+        select: {
+          id: true,
+          publicId: true,
+          username: true,
+          gold: true,
+          xp: true,
+          level: true,
+          lifetimeXp: true,
+          achievementPoints: true,
+          deckSlotLimit: true,
+          activeTitle: true,
+          winsPve: true,
+          winsPvp: true
+        }
+      });
+      if (!refreshedPlayer) {
+        throw new Error("Player nao encontrado.");
+      }
+
       return {
-        player: this.toPlayerSummary({
-          id: player.id,
-          publicId: player.publicId,
-          username: player.username,
-          gold: player.gold - config.cost,
-          winsPve: player.winsPve,
-          winsPvp: player.winsPvp
-        }),
+        player: this.toPlayerSummary(refreshedPlayer),
         packType,
         packCost: config.cost,
         cards: rewards
@@ -1887,24 +2435,48 @@ export class PersistenceService {
     ).sort((left, right) => left.localeCompare(right));
     const materialCardIds = normalizeMaterialCardIds(input.materialCardIds);
 
-    await this.prisma.fusionDiscovery.upsert({
+    const existing = await this.prisma.fusionDiscovery.findUnique({
       where: {
         playerId_key: {
           playerId,
           key: normalizedKey
         }
       },
-      create: {
-        playerId,
-        key: normalizedKey,
-        materialsCount: input.materialsCount >= 3 ? 3 : 2,
-        materialTags: asJson(materialTags),
-        materialCardIds: asJson(materialCardIds),
-        resultCardId: input.resultCardId,
-        resultName: input.resultName,
-        times: 1
+      select: {
+        id: true
+      }
+    });
+
+    if (!existing) {
+      await this.prisma.fusionDiscovery.create({
+        data: {
+          playerId,
+          key: normalizedKey,
+          materialsCount: input.materialsCount >= 3 ? 3 : 2,
+          materialTags: asJson(materialTags),
+          materialCardIds: asJson(materialCardIds),
+          resultCardId: input.resultCardId,
+          resultName: input.resultName,
+          times: 1
+        }
+      });
+
+      await this.prisma.$transaction(async (tx) => {
+        await this.grantXp(tx, playerId, FUSION_DISCOVERY_XP_GAIN);
+        await this.applyProgressEvents(tx, playerId, [{ key: "FUSION_DISCOVERY", amount: 1 }]);
+        await this.evaluateAchievements(tx, playerId);
+      });
+      return;
+    }
+
+    await this.prisma.fusionDiscovery.update({
+      where: {
+        playerId_key: {
+          playerId,
+          key: normalizedKey
+        }
       },
-      update: {
+      data: {
         materialsCount: input.materialsCount >= 3 ? 3 : 2,
         materialTags: asJson(materialTags),
         materialCardIds: asJson(materialCardIds),
@@ -1913,6 +2485,12 @@ export class PersistenceService {
         times: { increment: 1 }
       }
     });
+
+    if (FUSION_REPEAT_XP_GAIN > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        await this.grantXp(tx, playerId, FUSION_REPEAT_XP_GAIN);
+      });
+    }
   }
 
   async registerFusionDiscovery(publicId: string, input: FusionDiscoveryInput): Promise<void> {
@@ -2053,7 +2631,7 @@ export class PersistenceService {
         id: npc.id,
         name: npc.name,
         tier: npc.tier,
-        rewardGold: npc.rewardGold,
+        rewardGold: scalePveGoldReward(npc.rewardGold),
         rewardCards: parseRewardDrops(npc.rewardCards),
         unlockRequirement,
         unlocked,
@@ -2103,7 +2681,7 @@ export class PersistenceService {
         id: npc.id,
         name: npc.name,
         tier: npc.tier,
-        rewardGold: npc.rewardGold,
+        rewardGold: scalePveGoldReward(npc.rewardGold),
         rewardCards: parseRewardDrops(npc.rewardCards),
         unlockRequirement: parseUnlockRequirement(npc.unlockRequirement),
         unlocked: target.unlocked,
@@ -2133,7 +2711,7 @@ export class PersistenceService {
     let rewardGold = 0;
 
     if (input.didWin) {
-      rewardGold = npc.rewardGold;
+      rewardGold = scalePveGoldReward(npc.rewardGold);
       const recentWinRows = await this.prisma.matchHistory.findMany({
         where: {
           playerId: player.id,
@@ -2192,7 +2770,22 @@ export class PersistenceService {
         }
       });
 
-      if (!input.didWin) return;
+      if (!input.didWin) {
+        await tx.player.update({
+          where: { id: player.id },
+          data: {
+            lastSeenAt: new Date()
+          }
+        });
+
+        await this.grantXp(tx, player.id, xpRewardForPveLoss(npc.tier));
+        await this.applyProgressEvents(tx, player.id, [
+          { key: "PVE_PLAY", amount: 1 },
+          { key: "DUEL_PLAY", amount: 1 }
+        ]);
+        await this.evaluateAchievements(tx, player.id);
+        return;
+      }
 
       await tx.player.update({
         where: { id: player.id },
@@ -2223,12 +2816,92 @@ export class PersistenceService {
           }
         });
       }
+
+      await this.grantXp(tx, player.id, xpRewardForPveWin(npc.tier));
+      await this.applyProgressEvents(tx, player.id, [
+        { key: "PVE_PLAY", amount: 1 },
+        { key: "PVE_WIN", amount: 1 },
+        { key: "DUEL_PLAY", amount: 1 }
+      ]);
+      await this.evaluateAchievements(tx, player.id);
     });
 
     return {
       rewardGold,
       rewardCards: rewardedCards
     };
+  }
+
+  async listPveDropProgress(publicId: string): Promise<PveDropProgressView[]> {
+    const player = await this.prisma.player.findUnique({
+      where: { publicId },
+      select: { id: true }
+    });
+    if (!player) throw new Error("Player nao encontrado.");
+
+    const [npcs, wins] = await Promise.all([
+      this.prisma.npc.findMany({
+        orderBy: [{ tier: "asc" }, { name: "asc" }],
+        select: {
+          id: true,
+          name: true,
+          tier: true,
+          rewardCards: true
+        }
+      }),
+      this.prisma.matchHistory.findMany({
+        where: {
+          playerId: player.id,
+          mode: "PVE",
+          result: "WIN",
+          rewardClaimed: true,
+          opponentNpcId: { not: null }
+        },
+        orderBy: {
+          endedAt: "desc"
+        },
+        select: {
+          opponentNpcId: true,
+          rewardCards: true
+        }
+      })
+    ]);
+
+    const obtainedByNpc = new Map<string, Set<string>>();
+    for (const win of wins) {
+      const npcId = win.opponentNpcId;
+      if (!npcId) continue;
+      const entry = obtainedByNpc.get(npcId) ?? new Set<string>();
+      const rewards = parseRewardedCards(win.rewardCards ?? []);
+      for (const reward of rewards) {
+        entry.add(reward.cardId);
+      }
+      obtainedByNpc.set(npcId, entry);
+    }
+
+    return npcs.map((npc) => {
+      const baseRewards = parseRewardDrops(npc.rewardCards);
+      const expandedRewards = buildRewardPoolForNpc({
+        baseRewards,
+        npcTier: npc.tier,
+        tierRewards: this.tierRewardPools.get(npc.tier) ?? []
+      });
+      const possibleCardIds = Array.from(new Set(expandedRewards.map((drop) => drop.cardId))).sort((left, right) => left.localeCompare(right));
+      const obtainedSet = obtainedByNpc.get(npc.id) ?? new Set<string>();
+      const obtainedCardIds = possibleCardIds.filter((cardId) => obtainedSet.has(cardId));
+      const missingCardIds = possibleCardIds.filter((cardId) => !obtainedSet.has(cardId));
+
+      return {
+        npcId: npc.id,
+        npcName: npc.name,
+        tier: npc.tier,
+        totalPossible: possibleCardIds.length,
+        obtainedCount: obtainedCardIds.length,
+        missingCount: missingCardIds.length,
+        obtainedCardIds,
+        missingCardIds
+      };
+    });
   }
 
   async recordPvpResult(input: {
@@ -2278,6 +2951,22 @@ export class PersistenceService {
           }
         ]
       });
+
+      await this.grantXp(tx, winner.id, xpRewardForPvpWin());
+      await this.grantXp(tx, loser.id, xpRewardForPvpLoss());
+
+      await this.applyProgressEvents(tx, winner.id, [
+        { key: "PVP_PLAY", amount: 1 },
+        { key: "PVP_WIN", amount: 1 },
+        { key: "DUEL_PLAY", amount: 1 }
+      ]);
+      await this.applyProgressEvents(tx, loser.id, [
+        { key: "PVP_PLAY", amount: 1 },
+        { key: "DUEL_PLAY", amount: 1 }
+      ]);
+
+      await this.evaluateAchievements(tx, winner.id);
+      await this.evaluateAchievements(tx, loser.id);
     });
   }
 }
@@ -2287,7 +2976,11 @@ export type {
   CollectionEntry,
   DeckListSummary,
   PlayerSummary,
+  PlayerAchievementView,
+  PlayerDailyMissionView,
+  ProgressionSummary,
   PveNpcView,
+  PveDropProgressView,
   PveResultSummary,
   ShopBoosterSummary,
   ShopConfigView,

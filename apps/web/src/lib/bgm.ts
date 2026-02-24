@@ -1,15 +1,40 @@
-export type BgmTrackId = "LOBBY" | "DUEL";
+export type BgmTrackId = "LOBBY" | "DUEL" | "DECK_BUILDER" | "NPC_SELECT";
+
+export const BGM_VOLUME_STORAGE_KEY = "ruptura_arcana_bgm_volume_v1";
+const DEFAULT_BGM_VOLUME = 0.22;
 
 const TRACK_SOURCES: Record<BgmTrackId, string[]> = {
   LOBBY: ["/audio/bgm/fm_lobby.mp3", "/audio/bgm/lobby.mp3"],
-  DUEL: ["/audio/bgm/fm_duel.mp3", "/audio/bgm/duel.mp3"]
+  DUEL: ["/audio/bgm/fm_duel.mp3", "/audio/bgm/duel.mp3"],
+  DECK_BUILDER: ["/audio/bgm/fm_build_deck.mp3", "/audio/bgm/fm_lobby.mp3", "/audio/bgm/lobby.mp3"],
+  NPC_SELECT: ["/audio/bgm/fm_npcs_select.mp3", "/audio/bgm/fm_lobby.mp3", "/audio/bgm/lobby.mp3"]
 };
 
 export function resolveTrackForPath(pathname: string | null): BgmTrackId | null {
   if (!pathname) return null;
   if (pathname.startsWith("/match")) return "DUEL";
+  if (pathname.startsWith("/deck-builder")) return "DECK_BUILDER";
+  if (pathname.startsWith("/pve")) return "NPC_SELECT";
   if (pathname.startsWith("/_")) return null;
   return "LOBBY";
+}
+
+export function loadBgmVolume(): number {
+  if (typeof window === "undefined") return DEFAULT_BGM_VOLUME;
+  const raw = window.localStorage.getItem(BGM_VOLUME_STORAGE_KEY);
+  if (!raw) return DEFAULT_BGM_VOLUME;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_BGM_VOLUME;
+  return Math.max(0, Math.min(1, parsed));
+}
+
+export function saveBgmVolume(volume: number): number {
+  const normalized = Math.max(0, Math.min(1, volume));
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(BGM_VOLUME_STORAGE_KEY, String(normalized));
+    window.dispatchEvent(new CustomEvent("bgm:volume-changed", { detail: normalized }));
+  }
+  return normalized;
 }
 
 export class BgmManager {
@@ -96,6 +121,10 @@ export class BgmManager {
     }
   }
 
+  getVolume(): number {
+    return this.volume;
+  }
+
   dispose(): void {
     if (!this.audio) return;
     this.audio.pause();
@@ -106,3 +135,4 @@ export class BgmManager {
   }
 }
 
+export const bgmManager = new BgmManager(loadBgmVolume());

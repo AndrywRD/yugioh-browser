@@ -18,8 +18,11 @@ interface BotDecisionInput {
   state: GameState;
   botPlayerId: string;
   tier: number;
+  personality?: BotPersonality;
   makeActionId: (suffix: string) => string;
 }
+
+export type BotPersonality = "AGGRESSIVE" | "CONTROL" | "FUSION" | "TRAP";
 
 interface CandidateAction {
   action: GameAction;
@@ -41,6 +44,33 @@ interface BoardMetrics {
 }
 
 const SLOT_PRIORITY = [2, 1, 3, 0, 4];
+
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function resolveBotPersonality(seed: string, tier: number): BotPersonality {
+  const roll = hashString(`${seed}:${tier}`) % 100;
+  if (tier >= 8) {
+    if (roll < 34) return "TRAP";
+    if (roll < 68) return "CONTROL";
+    return "FUSION";
+  }
+  if (tier >= 6) {
+    if (roll < 45) return "FUSION";
+    if (roll < 75) return "AGGRESSIVE";
+    return "CONTROL";
+  }
+  if (tier >= 3) {
+    return roll < 50 ? "AGGRESSIVE" : "CONTROL";
+  }
+  return "AGGRESSIVE";
+}
 
 function getPlayers(state: GameState, botPlayerId: string): { bot: PlayerState; opponent: PlayerState } | null {
   const bot = state.players.find((player) => player.id === botPlayerId);
@@ -248,7 +278,7 @@ function scoreAttack(attacker: MonsterOnBoard, defender: MonsterOnBoard | null, 
 
   const assumedDef = defender.face === "FACE_DOWN" ? estimateFaceDownDefense(tier) : defenderStats.def;
   const diff = attackerAtk - assumedDef;
-  const hiddenPenalty = defender.face === "FACE_DOWN" ? (tier <= 2 ? 280 : 120) : 0;
+  const hiddenPenalty = defender.face === "FACE_DOWN" ? (tier <= 2 ? 280 : tier >= 6 ? 45 : 120) : 0;
 
   if (diff > 0) return 1_200 + diff - hiddenPenalty;
   return -520 + Math.floor(diff * 0.65) - hiddenPenalty;
@@ -282,7 +312,9 @@ function buildFusionCandidate(input: BotDecisionInput, bot: PlayerState, addCand
 
       const resultPower = (resultTemplate.atk ?? 0) + (resultTemplate.def ?? 0) * 0.35;
       const fallbackPenalty = fusion.failed ? 1_200 : 0;
-      const score = Math.floor(1_100 + resultPower - fallbackPenalty);
+      let score = Math.floor(1_100 + resultPower - fallbackPenalty);
+      if (input.personality === "FUSION") score += 240;
+      if (input.tier >= 6) score += 120;
       const action = createAction(input.makeActionId("fuse"), "FUSE", {
         materials: [
           { source: "HAND", instanceId: left.instanceId },
@@ -294,6 +326,45 @@ function buildFusionCandidate(input: BotDecisionInput, bot: PlayerState, addCand
 
       if (validateAction(input.state, action, input.botPlayerId).ok) {
         addCandidate({ action, score });
+      }
+    }
+  }
+
+  if (input.tier < 6 || handMonsters.length < 3) return;
+
+  for (let i = 0; i < handMonsters.length; i += 1) {
+    for (let j = i + 1; j < handMonsters.length; j += 1) {
+      for (let k = j + 1; k < handMonsters.length; k += 1) {
+        const left = handMonsters[i];
+        const mid = handMonsters[j];
+        const right = handMonsters[k];
+        const materials = [
+          buildMaterialSummary(left.instanceId, left.template.id),
+          buildMaterialSummary(mid.instanceId, mid.template.id),
+          buildMaterialSummary(right.instanceId, right.template.id)
+        ];
+        const fusion = resolveFusionFromOrderedMaterials(materials, input.state.seed + input.state.turn.turnNumber + i + j + k);
+        const resultTemplate = CARD_TEMPLATES[fusion.resultTemplateId];
+        if (!resultTemplate || resultTemplate.kind !== "MONSTER") continue;
+
+        const resultPower = (resultTemplate.atk ?? 0) + (resultTemplate.def ?? 0) * 0.35;
+        const fallbackPenalty = fusion.failed ? 1_500 : 0;
+        let score = Math.floor(1_300 + resultPower - fallbackPenalty);
+        score += input.personality === "FUSION" ? 340 : 180;
+
+        const action = createAction(input.makeActionId("fuse3"), "FUSE", {
+          materials: [
+            { source: "HAND", instanceId: left.instanceId },
+            { source: "HAND", instanceId: mid.instanceId },
+            { source: "HAND", instanceId: right.instanceId }
+          ],
+          order: [left.instanceId, mid.instanceId, right.instanceId],
+          resultSlot: freeSlot
+        });
+
+        if (validateAction(input.state, action, input.botPlayerId).ok) {
+          addCandidate({ action, score });
+        }
       }
     }
   }
@@ -319,6 +390,8 @@ function addSummonAndSetCandidates(input: BotDecisionInput, bot: PlayerState, op
     if (bot.monsterZone.every((slot) => slot === null)) summonScore += 180;
     if (atk < opponentStrongestAtk && def > atk) summonScore -= 220;
     summonScore += input.tier * 35;
+    if (input.personality === "AGGRESSIVE") summonScore += 120;
+    if (input.personality === "FUSION") summonScore += 80;
 
     const summonAction = createAction(input.makeActionId("summon"), "SUMMON_MONSTER", {
       handInstanceId: item.instanceId,
@@ -332,7 +405,11 @@ function addSummonAndSetCandidates(input: BotDecisionInput, bot: PlayerState, op
     let setScore = 380 + def;
     if (opponentStrongestAtk > atk) setScore += 220;
     if (input.tier >= 4) setScore -= 120;
+    if (input.tier >= 7) setScore -= 160;
     if (input.state.turn.turnNumber === 1) setScore += 120;
+    if (input.personality === "CONTROL" || input.personality === "TRAP") {
+      setScore += 120;
+    }
 
     const setAction = createAction(input.makeActionId("set-monster"), "SET_MONSTER", {
       handInstanceId: item.instanceId,
@@ -360,7 +437,9 @@ function addSpellTrapCandidates(input: BotDecisionInput, bot: PlayerState, oppon
       const activateAction = createAction(input.makeActionId("spell-now"), "ACTIVATE_SPELL_FROM_HAND", activatePayload);
       if (validateAction(input.state, activateAction, input.botPlayerId).ok) {
         const effectScore = scoreEffectKey(template.effectKey, metrics);
-        addCandidate({ action: activateAction, score: effectScore + 220 });
+        let score = effectScore + 220;
+        if (template.kind === "SPELL" && input.personality === "FUSION" && template.effectKey?.includes("EQUIP")) score += 120;
+        addCandidate({ action: activateAction, score });
       }
     }
 
@@ -372,7 +451,11 @@ function addSpellTrapCandidates(input: BotDecisionInput, bot: PlayerState, oppon
       });
       if (validateAction(input.state, setAction, input.botPlayerId).ok) {
         const setBase = template.kind === "TRAP" ? 340 : 180;
-        const score = setBase + Math.floor(scoreEffectKey(template.effectKey, metrics) * 0.35);
+        let score = setBase + Math.floor(scoreEffectKey(template.effectKey, metrics) * 0.35);
+        if (template.kind === "TRAP" && (input.personality === "TRAP" || input.personality === "CONTROL")) {
+          score += 180;
+        }
+        if (input.tier >= 7 && template.kind === "TRAP") score += 90;
         addCandidate({ action: setAction, score });
       }
     }
@@ -388,7 +471,10 @@ function addSpellTrapCandidates(input: BotDecisionInput, bot: PlayerState, oppon
         : { slot };
     const activateSetAction = createAction(input.makeActionId("activate-set"), "ACTIVATE_SET_CARD", activateSetPayload);
     if (!validateAction(input.state, activateSetAction, input.botPlayerId).ok) continue;
-    const score = scoreEffectKey(fieldTemplate?.effectKey, metrics) + 260;
+    let score = scoreEffectKey(fieldTemplate?.effectKey, metrics) + 260;
+    if (fieldTemplate?.kind === "TRAP" && (input.personality === "TRAP" || input.personality === "CONTROL")) {
+      score += 120;
+    }
     addCandidate({ action: activateSetAction, score });
   }
 }
@@ -409,9 +495,12 @@ function addAttackCandidates(input: BotDecisionInput, bot: PlayerState, opponent
         target: "DIRECT"
       });
       if (validateAction(input.state, directAction, input.botPlayerId).ok) {
+        let score = scoreAttack(attacker, null, input.tier, opponent.lp);
+        if (input.personality === "AGGRESSIVE") score += 160;
+        if (input.tier >= 7) score += 100;
         addCandidate({
           action: directAction,
-          score: scoreAttack(attacker, null, input.tier, opponent.lp)
+          score
         });
       }
       continue;
@@ -425,9 +514,13 @@ function addAttackCandidates(input: BotDecisionInput, bot: PlayerState, opponent
         target: { slot: defenderSlot }
       });
       if (!validateAction(input.state, attackAction, input.botPlayerId).ok) continue;
+      let score = scoreAttack(attacker, defender, input.tier, opponent.lp);
+      if (input.personality === "AGGRESSIVE") score += 120;
+      if (input.personality === "CONTROL" && defender.position === "ATTACK") score += 60;
+      if (input.tier >= 7) score += 90;
       addCandidate({
         action: attackAction,
-        score: scoreAttack(attacker, defender, input.tier, opponent.lp)
+        score
       });
     }
   }
@@ -446,7 +539,9 @@ function addPositionCandidates(input: BotDecisionInput, bot: PlayerState, oppone
         position: "DEFENSE"
       });
       if (validateAction(input.state, defenseAction, input.botPlayerId).ok) {
-        addCandidate({ action: defenseAction, score: 620 + stats.def / 3 });
+        let score = 620 + stats.def / 3;
+        if (input.personality === "CONTROL" || input.personality === "TRAP") score += 120;
+        addCandidate({ action: defenseAction, score });
       }
     }
 
@@ -456,7 +551,9 @@ function addPositionCandidates(input: BotDecisionInput, bot: PlayerState, oppone
         position: "ATTACK"
       });
       if (validateAction(input.state, attackAction, input.botPlayerId).ok) {
-        addCandidate({ action: attackAction, score: 560 + stats.atk / 3 });
+        let score = 560 + stats.atk / 3;
+        if (input.personality === "AGGRESSIVE") score += 120;
+        addCandidate({ action: attackAction, score });
       }
     }
   }
@@ -478,7 +575,19 @@ export function buildBotTurnAction(input: BotDecisionInput): GameAction | null {
     addPositionCandidates(input, bot, opponent, addCandidate);
   }
 
+  const personality = input.personality ?? resolveBotPersonality(input.botPlayerId, input.tier);
   candidates.sort((left, right) => right.score - left.score);
+  if (input.tier <= 2 && candidates.length > 1) {
+    const topSlice = candidates.slice(0, Math.min(3, candidates.length));
+    const selected = topSlice[Math.floor(Math.random() * topSlice.length)];
+    if (selected && selected.score >= -500) return selected.action;
+  }
+  if (personality === "TRAP" && input.tier >= 7) {
+    const trapPreferred = candidates.find((candidate) =>
+      candidate.action.type === "SET_SPELL_TRAP" || candidate.action.type === "ACTIVATE_SET_CARD"
+    );
+    if (trapPreferred && trapPreferred.score >= 520) return trapPreferred.action;
+  }
   const best = candidates[0];
   if (!best) return null;
   if (best.score < -500) return null;
@@ -489,6 +598,7 @@ export function buildReactiveBotAction(input: BotDecisionInput): GameAction | nu
   const pair = getPlayers(input.state, input.botPlayerId);
   if (!pair) return null;
 
+  const personality = input.personality ?? resolveBotPersonality(input.botPlayerId, input.tier);
   const { bot, opponent } = pair;
   const pending = input.state.pendingAttack;
 
@@ -512,7 +622,8 @@ export function buildReactiveBotAction(input: BotDecisionInput): GameAction | nu
     }
 
     trapCandidates.sort((left, right) => right.score - left.score);
-    const threshold = Math.max(120, 260 - input.tier * 20);
+    const thresholdBase = personality === "TRAP" || personality === "CONTROL" ? 95 : 120;
+    const threshold = Math.max(thresholdBase, 260 - input.tier * 22);
     const bestTrap = trapCandidates[0];
     if (bestTrap && bestTrap.score >= threshold) {
       return bestTrap.action;
@@ -537,7 +648,8 @@ export function buildReactiveBotAction(input: BotDecisionInput): GameAction | nu
   }
 
   candidates.sort((left, right) => right.score - left.score);
-  const threshold = Math.max(140, 280 - input.tier * 20);
+  const thresholdBase = personality === "TRAP" ? 120 : 140;
+  const threshold = Math.max(thresholdBase, 280 - input.tier * 22);
   const best = candidates[0];
   if (!best || best.score < threshold) return null;
   return best.action;

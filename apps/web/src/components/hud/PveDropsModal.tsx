@@ -17,6 +17,9 @@ interface PveDropsModalProps {
   rewardCards: PveRewardCard[];
   onClose: () => void;
   onLeave: () => void;
+  onRematch?: () => void;
+  canRematch?: boolean;
+  rematchBusy?: boolean;
 }
 
 export function PveDropsModal({
@@ -26,7 +29,10 @@ export function PveDropsModal({
   rewardGold,
   rewardCards,
   onClose,
-  onLeave
+  onLeave,
+  onRematch,
+  canRematch = false,
+  rematchBusy = false
 }: PveDropsModalProps) {
   const [mounted, setMounted] = useState(false);
 
@@ -83,6 +89,16 @@ export function PveDropsModal({
         </div>
 
         <div className="mt-4 flex justify-end gap-2">
+          {canRematch ? (
+            <button
+              type="button"
+              onClick={onRematch}
+              disabled={rematchBusy}
+              className="rounded-lg border border-cyan-300/65 bg-cyan-700/80 px-4 py-2 text-sm font-semibold text-cyan-50 disabled:cursor-not-allowed disabled:opacity-45 hover:bg-cyan-600"
+            >
+              {rematchBusy ? "Iniciando..." : "Revanche"}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onLeave}

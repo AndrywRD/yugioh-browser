@@ -1,4 +1,4 @@
-import type { PlayerProfile, PveNpc } from "../../lib/api";
+import type { LevelProgress, PlayerProfile, PveNpc } from "../../lib/api";
 import { GameCard } from "./GameCard";
 import { LobbyIcon } from "./LobbyIcon";
 import { getUnlockRequirementLabel } from "./types";
@@ -8,6 +8,10 @@ interface ProgressCardProps {
   player: PlayerProfile | null;
   npcs: PveNpc[];
   fusionCount: number;
+  levelProgress: LevelProgress | null;
+  achievementsUnlocked: number;
+  availableAchievements: number;
+  dailyMissionCompleted: number;
 }
 
 function computeCurrentTier(npcs: PveNpc[]): number {
@@ -16,7 +20,16 @@ function computeCurrentTier(npcs: PveNpc[]): number {
   return Math.max(...defeatedTiers);
 }
 
-export function ProgressCard({ loading, player, npcs, fusionCount }: ProgressCardProps) {
+export function ProgressCard({
+  loading,
+  player,
+  npcs,
+  fusionCount,
+  levelProgress,
+  achievementsUnlocked,
+  availableAchievements,
+  dailyMissionCompleted
+}: ProgressCardProps) {
   if (!player) {
     return (
       <GameCard title="Progresso" subtitle="Acompanhe tiers e desbloqueios">
@@ -45,9 +58,17 @@ export function ProgressCard({ loading, player, npcs, fusionCount }: ProgressCar
           <p>
             Tier atual: <span className="font-semibold text-amber-100">T{currentTier}</span>
           </p>
+          <p className="text-slate-300">
+            Nivel: <span className="font-semibold text-cyan-100">{levelProgress?.level ?? player.level}</span>{" "}
+            | XP para proximo: {levelProgress?.xpToNextLevel ?? 0}
+          </p>
           <p className="text-slate-300">NPCs desbloqueados: {unlockedCount}</p>
           <p className="text-slate-300">NPCs derrotados: {defeatedCount}</p>
           <p className="text-slate-300">Fusoes descobertas: {fusionCount}</p>
+          <p className="text-slate-300">
+            Conquistas: {achievementsUnlocked}/{availableAchievements}
+          </p>
+          <p className="text-slate-300">Missoes resgatadas hoje: {dailyMissionCompleted}</p>
           <p className="rounded-lg border border-slate-700/80 bg-slate-900/65 p-2 text-[11px] text-slate-300">
             {nextUnlock
               ? `Proximo unlock: ${nextUnlock.name} (${getUnlockRequirementLabel(nextUnlock)})`
@@ -58,4 +79,3 @@ export function ProgressCard({ loading, player, npcs, fusionCount }: ProgressCar
     </GameCard>
   );
 }
-

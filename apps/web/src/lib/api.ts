@@ -42,8 +42,60 @@ export interface PlayerProfile {
   publicId: string;
   username: string;
   gold: number;
+  xp: number;
+  level: number;
+  lifetimeXp: number;
+  achievementPoints: number;
+  deckSlotLimit: number;
+  activeTitle: string | null;
   winsPve: number;
   winsPvp: number;
+}
+
+export interface LevelProgress {
+  level: number;
+  xp: number;
+  lifetimeXp: number;
+  xpInLevel: number;
+  xpToNextLevel: number;
+  totalToCurrentLevel: number;
+  totalToNextLevel: number;
+}
+
+export interface PlayerAchievement {
+  key: string;
+  title: string;
+  description: string;
+  rewardGold: number;
+  rewardXp: number;
+  rewardDeckSlots: number;
+  rewardTitle: string | null;
+  progressSnapshot: number;
+  unlockedAt: number;
+}
+
+export type DailyMissionCategory = "PVE" | "PVP" | "SHOP" | "FUSION" | "GENERAL";
+
+export interface DailyMission {
+  key: string;
+  title: string;
+  description: string;
+  category: DailyMissionCategory;
+  target: number;
+  progress: number;
+  rewardGold: number;
+  rewardXp: number;
+  claimed: boolean;
+  missionDate: string;
+}
+
+export interface ProgressionResponse {
+  player: PlayerProfile;
+  levelProgress: LevelProgress;
+  achievements: PlayerAchievement[];
+  availableAchievements: number;
+  dailyMissions: DailyMission[];
+  missionDate: string;
 }
 
 export function getStoredPublicId(): string | null {
@@ -189,6 +241,17 @@ export interface PveNpc {
   aceCardName?: string;
 }
 
+export interface PveDropProgress {
+  npcId: string;
+  npcName: string;
+  tier: number;
+  totalPossible: number;
+  obtainedCount: number;
+  missingCount: number;
+  obtainedCardIds: string[];
+  missingCardIds: string[];
+}
+
 export interface FusionDiscoveryEntry {
   key: string;
   materialsCount: 2 | 3;
@@ -264,6 +327,22 @@ export async function updatePlayerProfile(publicId: string, username: string): P
   });
   const payload = await parseJsonResponse<{ player: PlayerProfile }>(response);
   return payload.player;
+}
+
+export async function fetchProgression(publicId: string): Promise<ProgressionResponse> {
+  const response = await fetch(buildUrl("/api/progression"), {
+    method: "GET",
+    headers: withPlayerHeader(publicId)
+  });
+  return parseJsonResponse<ProgressionResponse>(response);
+}
+
+export async function claimDailyMissionReward(publicId: string, missionKey: string): Promise<ProgressionResponse> {
+  const response = await fetch(buildUrl(`/api/progression/missions/${encodeURIComponent(missionKey)}/claim`), {
+    method: "POST",
+    headers: withPlayerHeader(publicId)
+  });
+  return parseJsonResponse<ProgressionResponse>(response);
 }
 
 export async function resetPlayerProgress(publicId: string): Promise<{ player: PlayerProfile; decks: DeckListResponse }> {
@@ -381,6 +460,15 @@ export async function fetchPveNpcs(publicId: string): Promise<PveNpc[]> {
   });
   const payload = await parseJsonResponse<{ npcs: PveNpc[] }>(response);
   return payload.npcs;
+}
+
+export async function fetchPveDropProgress(publicId: string): Promise<PveDropProgress[]> {
+  const response = await fetch(buildUrl("/api/pve/drops"), {
+    method: "GET",
+    headers: withPlayerHeader(publicId)
+  });
+  const payload = await parseJsonResponse<{ progress: PveDropProgress[] }>(response);
+  return payload.progress;
 }
 
 export async function startPveMatch(publicId: string, npcId: string): Promise<{ roomCode: string; npc: { id: string; name: string; tier: number } }> {

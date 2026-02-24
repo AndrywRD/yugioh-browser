@@ -32,7 +32,7 @@ import type {
   RoomState
 } from "@ruptura-arcana/shared";
 import { Server } from "socket.io";
-import { buildBotTurnAction, buildReactiveBotAction } from "./ai/botBrain";
+import { buildBotTurnAction, buildReactiveBotAction, resolveBotPersonality } from "./ai/botBrain";
 import { prisma } from "./db/prisma";
 import { type RuntimeRoom, RoomManager } from "./rooms/roomManager";
 import { PersistenceService } from "./services/persistenceService";
@@ -361,11 +361,13 @@ async function runBotTurn(roomCode: string): Promise<void> {
 
   const makeActionId = (suffix: string) => `bot-${room.code}-${Date.now()}-${suffix}`;
   const tier = room.pveConfig?.tier ?? 0;
+  const personality = resolveBotPersonality(room.pveConfig?.npcId ?? botPlayerId, tier);
   const plannedAction =
     buildBotTurnAction({
       state: room.gameState,
       botPlayerId,
       tier,
+      personality,
       makeActionId
     }) ??
     ({
@@ -404,10 +406,12 @@ async function runBotReaction(roomCode: string): Promise<void> {
 
   const makeActionId = (suffix: string) => `bot-react-${room.code}-${Date.now()}-${suffix}`;
   const tier = room.pveConfig?.tier ?? 0;
+  const personality = resolveBotPersonality(room.pveConfig?.npcId ?? botPlayerId, tier);
   const reaction = buildReactiveBotAction({
     state: room.gameState,
     botPlayerId,
     tier,
+    personality,
     makeActionId
   });
   if (!reaction) return;
@@ -545,6 +549,39 @@ app.patch("/api/player/profile", async (request, reply) => {
     return reply.send({ player });
   } catch (error) {
     return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao atualizar perfil." });
+  }
+});
+
+app.get("/api/progression", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  try {
+    const progression = await persistence.getProgression(publicId);
+    return reply.send(progression);
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao buscar progressao." });
+  }
+});
+
+app.post("/api/progression/missions/:missionKey/claim", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const params = (request.params ?? {}) as { missionKey?: string };
+  if (!params.missionKey || typeof params.missionKey !== "string") {
+    return reply.status(400).send({ message: "missionKey obrigatorio." });
+  }
+
+  try {
+    const progression = await persistence.claimDailyMission(publicId, params.missionKey);
+    return reply.send(progression);
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao resgatar missao." });
   }
 });
 
@@ -818,6 +855,19 @@ app.get("/api/pve/npcs", async (request, reply) => {
     return reply.send({ npcs });
   } catch (error) {
     return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao buscar NPCs." });
+  }
+});
+
+app.get("/api/pve/drops", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+  try {
+    const progress = await persistence.listPveDropProgress(publicId);
+    return reply.send({ progress });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao buscar progresso de drops PVE." });
   }
 });
 

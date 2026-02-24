@@ -7,18 +7,22 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Deck } from "@ruptura-arcana/shared";
 import {
   type BoosterPackType,
+  claimDailyMissionReward,
   clearStoredPublicId,
   type CollectionEntry,
+  type DailyMission,
   fetchCollection,
   fetchDecks,
   fetchFusionLog,
-  fetchPlayerProfile,
+  fetchProgression,
   fetchPveNpcs,
   fetchShopConfig,
   fetchShopOffers,
   getStoredPublicId,
+  type LevelProgress,
   loginAccount,
   openShopBooster,
+  type PlayerAchievement,
   purchaseShopCard,
   registerAccount,
   rerollShopOffers,
@@ -32,6 +36,7 @@ import {
   type ShopOffer
 } from "../lib/api";
 import { CollectionPanel } from "../components/lobby/CollectionPanel";
+import { DailyMissionsCard } from "../components/lobby/DailyMissionsCard";
 import { GameCard } from "../components/lobby/GameCard";
 import { JoinCodeModal } from "../components/lobby/JoinCodeModal";
 import { LobbyHeader } from "../components/lobby/LobbyHeader";
@@ -44,7 +49,23 @@ import { ProgressCard } from "../components/lobby/ProgressCard";
 import { QuickActions } from "../components/lobby/QuickActions";
 import { ShopPanel } from "../components/lobby/ShopPanel";
 import { TabsAnimatedPanel } from "../components/lobby/TabsAnimatedPanel";
+import { TutorialCard } from "../components/lobby/TutorialCard";
 import type { LobbySection } from "../components/lobby/types";
+import {
+  applyUiPreferences,
+  getDefaultUiPreferences,
+  loadUiPreferences,
+  saveUiPreferences,
+  type UiPreferences
+} from "../lib/uiPreferences";
+import {
+  buildTutorialMatchUrl,
+  loadTutorialProgress,
+  resetTutorialProgress,
+  TUTORIAL_LESSONS,
+  type TutorialLessonId,
+  type TutorialProgress
+} from "../lib/tutorial";
 
 const LAST_ROOM_CODE_STORAGE_KEY = "ruptura_arcana_last_room_code";
 const LOBBY_NOTICES_STORAGE_KEY = "ruptura_arcana_lobby_notices";
@@ -58,6 +79,7 @@ export default function LobbyPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [section, setSection] = useState<LobbySection>("CAMPAIGN");
+  const [uiPreferences, setUiPreferences] = useState<UiPreferences>(getDefaultUiPreferences());
 
   const [authBusy, setAuthBusy] = useState(false);
   const [authMode, setAuthMode] = useState<"LOGIN" | "REGISTER">("LOGIN");
@@ -69,6 +91,11 @@ export default function LobbyPage() {
   const [decks, setDecks] = useState<DeckListResponse>({ decks: [], activeDeckId: null });
   const [npcs, setNpcs] = useState<PveNpc[]>([]);
   const [collectionEntries, setCollectionEntries] = useState<CollectionEntry[]>([]);
+  const [levelProgress, setLevelProgress] = useState<LevelProgress | null>(null);
+  const [achievements, setAchievements] = useState<PlayerAchievement[]>([]);
+  const [availableAchievements, setAvailableAchievements] = useState(0);
+  const [dailyMissions, setDailyMissions] = useState<DailyMission[]>([]);
+  const [claimingMissionKey, setClaimingMissionKey] = useState<string | null>(null);
   const [shopOffers, setShopOffers] = useState<ShopOffer[]>([]);
   const [shopMeta, setShopMeta] = useState<ShopMeta | null>(null);
   const [shopConfig, setShopConfig] = useState<ShopConfig | null>(null);
@@ -78,6 +105,8 @@ export default function LobbyPage() {
   const [buyingCardId, setBuyingCardId] = useState<string | null>(null);
   const [rerollingShop, setRerollingShop] = useState(false);
   const [openingBoosterType, setOpeningBoosterType] = useState<BoosterPackType | null>(null);
+  const [tutorialProgress, setTutorialProgress] = useState<TutorialProgress | null>(null);
+  const [tutorialBusy, setTutorialBusy] = useState(false);
 
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [joinModalOpen, setJoinModalOpen] = useState(false);
@@ -107,11 +136,35 @@ export default function LobbyPage() {
     setTickerMessages((current) => [message, ...current].slice(0, 3));
   };
 
+  const applyProgressionState = (
+    payload: {
+      player: PlayerProfile;
+      levelProgress: LevelProgress;
+      achievements: PlayerAchievement[];
+      availableAchievements: number;
+      dailyMissions: DailyMission[];
+    },
+    options?: { announceLevelUp?: boolean; previousLevel?: number; announceMissionClaim?: boolean }
+  ) => {
+    setPlayer(payload.player);
+    setLevelProgress(payload.levelProgress);
+    setAchievements(payload.achievements);
+    setAvailableAchievements(payload.availableAchievements);
+    setDailyMissions(payload.dailyMissions);
+
+    if (options?.announceLevelUp && typeof options.previousLevel === "number" && payload.player.level > options.previousLevel) {
+      pushTicker(`Level UP! ${options.previousLevel} -> ${payload.player.level}`, "success");
+    }
+    if (options?.announceMissionClaim) {
+      pushTicker("Missao diaria resgatada com sucesso.", "success");
+    }
+  };
+
   const refreshLobbyData = async (publicId: string) => {
     try {
       setShopLoading(true);
-      const [profile, deckPayload, npcPayload, collection, fusionLog, shop, config] = await Promise.all([
-        fetchPlayerProfile(publicId),
+      const [progression, deckPayload, npcPayload, collection, fusionLog, shop, config] = await Promise.all([
+        fetchProgression(publicId),
         fetchDecks(publicId),
         fetchPveNpcs(publicId),
         fetchCollection(publicId).catch(() => []),
@@ -144,7 +197,13 @@ export default function LobbyPage() {
         )
       ]);
 
-      setPlayer(profile);
+      applyProgressionState({
+        player: progression.player,
+        levelProgress: progression.levelProgress,
+        achievements: progression.achievements,
+        availableAchievements: progression.availableAchievements,
+        dailyMissions: progression.dailyMissions
+      });
       setDecks(deckPayload);
       setNpcs(npcPayload);
       setCollectionEntries(collection);
@@ -157,6 +216,41 @@ export default function LobbyPage() {
       setShopLoading(false);
     }
   };
+
+  const refreshProgressionOnly = async (
+    publicId: string,
+    options?: { announceLevelUp?: boolean; previousLevel?: number; announceMissionClaim?: boolean }
+  ) => {
+    const progression = await fetchProgression(publicId);
+    applyProgressionState(
+      {
+        player: progression.player,
+        levelProgress: progression.levelProgress,
+        achievements: progression.achievements,
+        availableAchievements: progression.availableAchievements,
+        dailyMissions: progression.dailyMissions
+      },
+      options
+    );
+    return progression;
+  };
+
+  useEffect(() => {
+    const loaded = loadUiPreferences();
+    setUiPreferences(loaded);
+    applyUiPreferences(loaded);
+  }, []);
+
+  useEffect(() => {
+    const syncTutorial = () => {
+      setTutorialProgress(loadTutorialProgress());
+      setTutorialBusy(false);
+    };
+
+    syncTutorial();
+    window.addEventListener("focus", syncTutorial);
+    return () => window.removeEventListener("focus", syncTutorial);
+  }, []);
 
   useEffect(() => {
     const boot = async () => {
@@ -184,6 +278,11 @@ export default function LobbyPage() {
         const storedPublicId = getStoredPublicId();
         if (!storedPublicId) {
           setPlayer(null);
+          setLevelProgress(null);
+          setAchievements([]);
+          setAvailableAchievements(0);
+          setDailyMissions([]);
+          setClaimingMissionKey(null);
           setDecks({ decks: [], activeDeckId: null });
           setNpcs([]);
           setCollectionEntries([]);
@@ -199,6 +298,11 @@ export default function LobbyPage() {
       } catch (err) {
         clearStoredPublicId();
         setPlayer(null);
+        setLevelProgress(null);
+        setAchievements([]);
+        setAvailableAchievements(0);
+        setDailyMissions([]);
+        setClaimingMissionKey(null);
         setDecks({ decks: [], activeDeckId: null });
         setNpcs([]);
         setCollectionEntries([]);
@@ -260,6 +364,11 @@ export default function LobbyPage() {
   const handleLogout = () => {
     clearStoredPublicId();
     setPlayer(null);
+    setLevelProgress(null);
+    setAchievements([]);
+    setAvailableAchievements(0);
+    setDailyMissions([]);
+    setClaimingMissionKey(null);
     setDecks({ decks: [], activeDeckId: null });
     setNpcs([]);
     setCollectionEntries([]);
@@ -277,6 +386,16 @@ export default function LobbyPage() {
     setRerollingShop(false);
     setOpeningBoosterType(null);
     setSection("CAMPAIGN");
+  };
+
+  const handleUpdateUiPreferences = (patch: Partial<UiPreferences>) => {
+    setUiPreferences((current) => {
+      const merged: UiPreferences = {
+        ...current,
+        ...patch
+      };
+      return saveUiPreferences(merged);
+    });
   };
 
   const handleSetActiveDeck = async (deckId: string) => {
@@ -318,6 +437,7 @@ export default function LobbyPage() {
     const prevOffers = shopOffers;
     const prevCollection = collectionEntries;
     const prevCollectionCount = collectionCount;
+    const prevLevel = player.level;
     const optimisticGold = player.gold - targetOffer.price;
 
     setPlayer({ ...player, gold: optimisticGold });
@@ -358,6 +478,11 @@ export default function LobbyPage() {
       setError("");
       const result = await purchaseShopCard(prevPlayer.publicId, cardId);
       setPlayer(result.player);
+      try {
+        await refreshProgressionOnly(prevPlayer.publicId, { announceLevelUp: true, previousLevel: prevLevel });
+      } catch {
+        // keep purchase result even if progression refresh fails
+      }
       pushTicker(`Compra realizada: ${result.purchased.name} (-${result.purchased.price} gold).`, "success");
 
       void (async () => {
@@ -432,6 +557,7 @@ export default function LobbyPage() {
       setOpeningBoosterType(packType);
       setError("");
       const result = await openShopBooster(player.publicId, packType);
+      const previousLevel = player.level;
       setPlayer(result.player);
       setCollectionEntries((current) => {
         const map = new Map(current.map((entry) => [entry.cardId, { ...entry }]));
@@ -468,6 +594,11 @@ export default function LobbyPage() {
         }
       })();
 
+      try {
+        await refreshProgressionOnly(player.publicId, { announceLevelUp: true, previousLevel });
+      } catch {
+        // keep booster rewards even if progression refresh fails
+      }
       pushTicker(`Pacote ${packType} aberto: ${result.cards.length} cartas.`, "success");
       return result;
     } catch (err) {
@@ -478,6 +609,57 @@ export default function LobbyPage() {
     } finally {
       setOpeningBoosterType(null);
     }
+  };
+
+  const handleClaimDailyMission = async (missionKey: string) => {
+    if (!player) {
+      setSection("PROFILE");
+      return;
+    }
+
+    try {
+      setClaimingMissionKey(missionKey);
+      setError("");
+      const previousLevel = player.level;
+      const progression = await claimDailyMissionReward(player.publicId, missionKey);
+      applyProgressionState(
+        {
+          player: progression.player,
+          levelProgress: progression.levelProgress,
+          achievements: progression.achievements,
+          availableAchievements: progression.availableAchievements,
+          dailyMissions: progression.dailyMissions
+        },
+        { announceMissionClaim: true, announceLevelUp: true, previousLevel }
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Falha ao resgatar missao.";
+      setError(message);
+      pushTicker(message, "warning");
+    } finally {
+      setClaimingMissionKey(null);
+    }
+  };
+
+  const handleStartTutorialLesson = (lessonId: TutorialLessonId) => {
+    if (!player) {
+      setSection("PROFILE");
+      return;
+    }
+
+    setTutorialBusy(true);
+    setError("");
+    const tutorialUrl = buildTutorialMatchUrl({
+      lessonId,
+      username: player.username
+    });
+    router.push(tutorialUrl);
+  };
+
+  const handleResetTutorial = () => {
+    const updated = resetTutorialProgress();
+    setTutorialProgress(updated);
+    pushTicker("Tutorial resetado. Voce pode recomecar da licao 1.", "info");
   };
 
   const handlePrimaryAction = () => {
@@ -616,20 +798,31 @@ export default function LobbyPage() {
 
     if (section === "CAMPAIGN") {
       return (
-        <ShopPanel
-          loading={loading || shopLoading}
-          playerLogged={Boolean(player)}
-          gold={player.gold}
-          offers={shopOffers}
-          shopMeta={shopMeta}
-          shopConfig={shopConfig}
-          buyingCardId={buyingCardId}
-          onBuy={handleBuyShopCard}
-          rerolling={rerollingShop}
-          onReroll={handleRerollShop}
-          openingBoosterType={openingBoosterType}
-          onOpenBooster={handleOpenBooster}
-        />
+        <div className="space-y-3">
+          <TutorialCard
+            loading={loading}
+            playerLogged={Boolean(player)}
+            progress={tutorialProgress}
+            lessons={TUTORIAL_LESSONS}
+            busy={tutorialBusy}
+            onStartLesson={(lessonId) => handleStartTutorialLesson(lessonId)}
+            onReset={handleResetTutorial}
+          />
+          <ShopPanel
+            loading={loading || shopLoading}
+            playerLogged={Boolean(player)}
+            gold={player.gold}
+            offers={shopOffers}
+            shopMeta={shopMeta}
+            shopConfig={shopConfig}
+            buyingCardId={buyingCardId}
+            onBuy={handleBuyShopCard}
+            rerolling={rerollingShop}
+            onReroll={handleRerollShop}
+            openingBoosterType={openingBoosterType}
+            onOpenBooster={handleOpenBooster}
+          />
+        </div>
       );
     }
 
@@ -667,8 +860,12 @@ export default function LobbyPage() {
         decks={decks}
         activeDeck={activeDeck}
         activeDeckTotal={activeDeckTotal}
+        levelProgress={levelProgress}
+        achievements={achievements}
         onSetActiveDeck={(deckId) => void handleSetActiveDeck(deckId)}
         onLogout={handleLogout}
+        uiPreferences={uiPreferences}
+        onUpdateUiPreferences={handleUpdateUiPreferences}
       />
     );
   };
@@ -716,7 +913,23 @@ export default function LobbyPage() {
                   onSetActiveDeck={(deckId) => void handleSetActiveDeck(deckId)}
                   onLogout={handleLogout}
                 />
-                <ProgressCard loading={loading} player={player} npcs={npcs} fusionCount={fusionCount} />
+                <ProgressCard
+                  loading={loading}
+                  player={player}
+                  npcs={npcs}
+                  fusionCount={fusionCount}
+                  levelProgress={levelProgress}
+                  achievementsUnlocked={achievements.length}
+                  availableAchievements={availableAchievements}
+                  dailyMissionCompleted={dailyMissions.filter((mission) => mission.claimed).length}
+                />
+                <DailyMissionsCard
+                  loading={loading}
+                  playerLogged={Boolean(player)}
+                  missions={dailyMissions}
+                  claimingMissionKey={claimingMissionKey}
+                  onClaim={(missionKey) => void handleClaimDailyMission(missionKey)}
+                />
               </aside>
             </div>
 

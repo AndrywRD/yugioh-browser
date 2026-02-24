@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CARD_INDEX, buildFusionDiscoveryCandidateFromTemplateIds } from "@ruptura-arcana/game";
 import type { CardClientView, DeckListPayload, FuseMaterial, GameEvent, GamePromptPayload, GameStateForClient, RoomState } from "@ruptura-arcana/shared";
 import { BoardStage, type SlotBadge, type SlotMarker } from "../../components/board/BoardStage";
@@ -52,6 +52,11 @@ import {
   type DeckCollection
 } from "../../lib/decks";
 import { fetchFusionLog, getStoredPublicId, type FusionDiscoveryEntry } from "../../lib/api";
+import {
+  completeTutorialLesson,
+  getTutorialLesson,
+  type TutorialLessonId
+} from "../../lib/tutorial";
 
 function actionId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -100,6 +105,12 @@ interface MatchPromptState {
     availableTrapSlots?: number[];
     defenderMayRespond?: boolean;
   };
+}
+
+interface TutorialObjectiveState {
+  key: string;
+  label: string;
+  done: boolean;
 }
 
 function uniqueMarkers(markers: SlotMarker[]): SlotMarker[] {
@@ -239,6 +250,11 @@ function isEquipEffectKey(effectKey?: string): boolean {
 const LAST_ROOM_CODE_STORAGE_KEY = "ruptura_arcana_last_room_code";
 const LOBBY_NOTICES_STORAGE_KEY = "ruptura_arcana_lobby_notices";
 
+function parseTutorialLessonId(value: string | null): TutorialLessonId | null {
+  if (value === "1" || value === "2" || value === "3") return value;
+  return null;
+}
+
 function appendLobbyNotices(notices: Array<{ text: string; tone?: "info" | "success" | "warning" }>): void {
   if (typeof window === "undefined") return;
   try {
@@ -289,11 +305,16 @@ export default function HomePage() {
   const [endState, setEndState] = useState<DuelOutcome | null>(null);
   const [endScreenDismissed, setEndScreenDismissed] = useState(false);
   const [pveResultModal, setPveResultModal] = useState<PveResultPayload | null>(null);
+  const [rematchBusy, setRematchBusy] = useState(false);
   const [menuAnchorRect, setMenuAnchorRect] = useState<AnchorRect | null>(null);
   const [attackHoverSlot, setAttackHoverSlot] = useState<SlotMarker | null>(null);
   const [roomCodeFromQuery, setRoomCodeFromQuery] = useState("");
   const [usernameFromQuery, setUsernameFromQuery] = useState("");
   const [autoCreateFromQuery, setAutoCreateFromQuery] = useState(false);
+  const [autoSoloFromQuery, setAutoSoloFromQuery] = useState(false);
+  const [tutorialLessonId, setTutorialLessonId] = useState<TutorialLessonId | null>(null);
+  const [tutorialObjectives, setTutorialObjectives] = useState<TutorialObjectiveState[]>([]);
+  const [tutorialCompleting, setTutorialCompleting] = useState(false);
   const [matchPrompt, setMatchPrompt] = useState<MatchPromptState | null>(null);
   const [waitingAttackResolution, setWaitingAttackResolution] = useState(false);
   const pendingFusionSlotRef = useRef<number | null>(null);
@@ -349,6 +370,7 @@ export default function HomePage() {
 
   const isMyTurn = snapshot ? isYourTurn(snapshot) : false;
   const summonOrFusionAvailable = snapshot ? canUseSummonOrFusion(snapshot) : false;
+  const canRequestRematch = Boolean(roomState && roomState.status === "FINISHED" && playerId && roomState.hostId === playerId);
   const activePrompt = matchPrompt;
   const waitingForPrompt = Boolean(activePrompt);
   const inputLockedByCombat = waitingForPrompt || waitingAttackResolution;
@@ -710,6 +732,23 @@ export default function HomePage() {
   const showMatch = Boolean(snapshot) && (roomState?.status === "RUNNING" || roomState?.status === "FINISHED");
   const inLobby = roomState && roomState.status === "LOBBY";
   const duelOutcome = useMemo(() => resolveDuelOutcome(snapshot, playerId), [snapshot, playerId]);
+  const tutorialLesson = useMemo(() => getTutorialLesson(tutorialLessonId), [tutorialLessonId]);
+  const tutorialActive = Boolean(tutorialLesson);
+  const tutorialCompleted = useMemo(
+    () => tutorialObjectives.length > 0 && tutorialObjectives.every((objective) => objective.done),
+    [tutorialObjectives]
+  );
+  const completeTutorialObjective = useCallback((objectiveKey: string) => {
+    setTutorialObjectives((current) => {
+      let changed = false;
+      const next = current.map((objective) => {
+        if (objective.key !== objectiveKey || objective.done) return objective;
+        changed = true;
+        return { ...objective, done: true };
+      });
+      return changed ? next : current;
+    });
+  }, []);
   const previewSelection =
     previewCard ??
     (selectedCard
@@ -745,7 +784,12 @@ export default function HomePage() {
     setRoomCodeFromQuery(params.get("roomCode")?.trim().toUpperCase() ?? "");
     setUsernameFromQuery(params.get("username")?.trim() ?? "");
     const autoCreateValue = params.get("autoCreate")?.trim().toLowerCase() ?? "";
+    const autoSoloValue = params.get("autoSolo")?.trim().toLowerCase() ?? "";
+    const tutorialValue = params.get("tutorial")?.trim().toLowerCase() ?? "";
+    const lessonId = parseTutorialLessonId(params.get("lesson")?.trim() ?? null);
     setAutoCreateFromQuery(autoCreateValue === "1" || autoCreateValue === "true" || autoCreateValue === "yes");
+    setAutoSoloFromQuery(autoSoloValue === "1" || autoSoloValue === "true" || autoSoloValue === "yes");
+    setTutorialLessonId(tutorialValue === "1" || tutorialValue === "true" || tutorialValue === "yes" ? lessonId : null);
   }, []);
 
   useEffect(() => {
@@ -754,8 +798,16 @@ export default function HomePage() {
   }, [usernameFromQuery]);
 
   useEffect(() => {
+    if (!tutorialLesson) {
+      setTutorialObjectives([]);
+      return;
+    }
+    setTutorialObjectives(tutorialLesson.objectives.map((objective) => ({ ...objective, done: false })));
+  }, [tutorialLesson]);
+
+  useEffect(() => {
     autoJoinAttemptedRef.current = false;
-  }, [autoCreateFromQuery, roomCodeFromQuery]);
+  }, [autoCreateFromQuery, autoSoloFromQuery, roomCodeFromQuery]);
 
   useEffect(() => {
     const unlock = () => sfx.unlock();
@@ -781,6 +833,12 @@ export default function HomePage() {
     sfx.play(endState === "VICTORY" ? "victory" : "defeat");
     endSfxPlayedRef.current = endState;
   }, [endScreenDismissed, endState, sfx]);
+
+  useEffect(() => {
+    if (tutorialLessonId !== "3") return;
+    if (duelOutcome !== "VICTORY") return;
+    completeTutorialObjective("win_duel");
+  }, [completeTutorialObjective, duelOutcome, tutorialLessonId]);
 
   useEffect(() => {
     const storedPlayerId = getStoredPublicId();
@@ -810,6 +868,15 @@ export default function HomePage() {
           roomCode: roomCodeFromQuery,
           username: usernameFromQuery || username
         });
+      } else if (autoSoloFromQuery && !autoJoinAttemptedRef.current) {
+        autoJoinAttemptedRef.current = true;
+        if (!syncActiveDeckToServer()) {
+          setRoomError("Deck invalido. Corrija no deck builder para iniciar o tutorial.");
+          return;
+        }
+        socket.emit("room:solo", {
+          username: usernameFromQuery || username
+        });
       } else if (autoCreateFromQuery && !autoJoinAttemptedRef.current) {
         autoJoinAttemptedRef.current = true;
         socket.emit("room:create", {
@@ -831,6 +898,9 @@ export default function HomePage() {
     });
     socket.on("room:state", (payload: RoomState) => {
       setRoomState(payload);
+      if (payload.status !== "FINISHED") {
+        setRematchBusy(false);
+      }
       setRoomError("");
       if (typeof window !== "undefined" && payload.roomCode) {
         window.localStorage.setItem(LAST_ROOM_CODE_STORAGE_KEY, payload.roomCode);
@@ -838,6 +908,7 @@ export default function HomePage() {
     });
     socket.on("room:error", (payload: { message: string }) => {
       setRoomError(payload.message);
+      setRematchBusy(false);
     });
     socket.on("game:snapshot", (payload: { state: GameStateForClient }) => {
       setSnapshot(payload.state);
@@ -868,6 +939,30 @@ export default function HomePage() {
       setTickerLines((prev) => [...translated, ...prev].slice(0, 8));
 
       for (const event of payload.events) {
+        if (tutorialLessonId && playerId) {
+          if (tutorialLessonId === "1") {
+            if (event.type === "MONSTER_SUMMONED" && event.playerId === playerId) {
+              completeTutorialObjective("summon_monster");
+            } else if (event.type === "ATTACK_DECLARED" && event.playerId === playerId) {
+              completeTutorialObjective("declare_attack");
+            } else if (event.type === "TURN_CHANGED" && event.playerId && event.playerId !== playerId) {
+              completeTutorialObjective("end_turn_once");
+            }
+          } else if (tutorialLessonId === "2") {
+            if (event.type === "MONSTER_SET" && event.playerId === playerId) {
+              completeTutorialObjective("set_monster");
+            } else if (event.type === "MONSTER_FLIP_SUMMONED" && event.playerId === playerId) {
+              completeTutorialObjective("flip_summon");
+            } else if (event.type === "SPELL_TRAP_SET" && event.playerId === playerId) {
+              completeTutorialObjective("set_spell_trap");
+            }
+          } else if (tutorialLessonId === "3") {
+            if ((event.type === "FUSION_RESOLVED" || event.type === "FUSION_FAILED") && event.playerId === playerId) {
+              completeTutorialObjective("perform_fusion");
+            }
+          }
+        }
+
         if (event.type === "ATTACK_WAITING_RESPONSE") {
           if (event.playerId && playerId && event.playerId !== playerId) {
             setWaitingAttackResolution(true);
@@ -1245,10 +1340,12 @@ export default function HomePage() {
     setAttackHoverSlot(null);
     setEndState(null);
     setEndScreenDismissed(false);
+    setRematchBusy(false);
     endSfxPlayedRef.current = null;
     pendingFusionSlotRef.current = null;
     setMatchPrompt(null);
     setWaitingAttackResolution(false);
+    setTutorialCompleting(false);
   };
 
   const goBackToLobby = () => {
@@ -1267,6 +1364,47 @@ export default function HomePage() {
       leaveRoom();
     }
     router.push("/");
+  };
+
+  const exitTutorial = () => {
+    if (showMatch) {
+      const confirmExit = window.confirm("Sair da licao atual e voltar ao lobby?");
+      if (!confirmExit) return;
+    }
+    if (roomState) {
+      leaveRoom();
+    }
+    appendLobbyNotices([{ text: "Tutorial pausado. Voce pode continuar depois.", tone: "info" }]);
+    router.push("/");
+  };
+
+  const completeTutorialAndReturn = () => {
+    if (!tutorialLessonId || !tutorialCompleted) return;
+    setTutorialCompleting(true);
+    const updated = completeTutorialLesson(tutorialLessonId);
+    const lessonOrder: TutorialLessonId[] = ["1", "2", "3"];
+    const nextLessonId = lessonOrder.find((lessonId) => !updated.completedLessons.includes(lessonId)) ?? null;
+    const nextLesson = nextLessonId ? getTutorialLesson(nextLessonId) : null;
+
+    const completeNotice = nextLesson
+      ? `Licao ${tutorialLessonId} concluida. Proxima: ${nextLesson.title}.`
+      : `Tutorial concluido! Licao ${tutorialLessonId} finalizada.`;
+
+    appendLobbyNotices([{ text: completeNotice, tone: "success" }]);
+    if (roomState) {
+      leaveRoom();
+    }
+    router.push("/");
+  };
+
+  const requestRematch = () => {
+    if (!canRequestRematch) return;
+    setRematchBusy(true);
+    setEndScreenDismissed(true);
+    setPveResultModal(null);
+    setLogs((current) => [withTimestamp("Solicitando revanche..."), ...current].slice(0, 100));
+    setTickerLines((current) => ["Solicitando revanche...", ...current].slice(0, 8));
+    socket.emit("room:start", {});
   };
 
   const toggleReady = () => {
@@ -1876,6 +2014,54 @@ export default function HomePage() {
                   />
                 </div>
 
+                {tutorialActive && tutorialLesson && (
+                  <div className="pointer-events-auto absolute left-2 top-[72px] z-tooltip w-[min(370px,calc(100%-250px))]">
+                    <div className="fm-panel rounded-lg border border-amber-300/45 bg-slate-900/90 p-2.5">
+                      <div className="mb-1.5 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="fm-title truncate text-[11px] font-semibold">Tutorial - Licao {tutorialLesson.id}/3</p>
+                          <p className="line-clamp-2 text-[11px] text-slate-200">{tutorialLesson.description}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={exitTutorial}
+                          className="rounded border border-slate-500/75 bg-slate-800/85 px-1.5 py-1 text-[10px] font-semibold text-slate-100 transition hover:bg-slate-700/85"
+                        >
+                          Sair
+                        </button>
+                      </div>
+
+                      <ul className="space-y-1">
+                        {tutorialObjectives.map((objective) => (
+                          <li key={objective.key} className="flex items-center gap-2 rounded border border-slate-700/75 bg-slate-950/55 px-2 py-1 text-[11px]">
+                            <span
+                              className={`inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-bold ${
+                                objective.done
+                                  ? "border-emerald-300/80 bg-emerald-500/25 text-emerald-100"
+                                  : "border-slate-500/70 bg-slate-800/75 text-slate-300"
+                              }`}
+                            >
+                              {objective.done ? "OK" : "..."}
+                            </span>
+                            <span className={objective.done ? "text-emerald-100" : "text-slate-200"}>{objective.label}</span>
+                          </li>
+                        ))}
+                      </ul>
+
+                      <div className="mt-2 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={completeTutorialAndReturn}
+                          disabled={!tutorialCompleted || tutorialCompleting}
+                          className="fm-button rounded-md px-2.5 py-1 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {tutorialCompleting ? "Finalizando..." : tutorialCompleted ? "Concluir Licao" : "Complete os objetivos"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="pointer-events-auto absolute right-2 top-2 z-tooltip flex flex-col items-end gap-1.5">
                   <button
                     type="button"
@@ -2052,6 +2238,9 @@ export default function HomePage() {
               won={endState === "VICTORY"}
               onLeave={returnToHome}
               onDismiss={() => setEndScreenDismissed(true)}
+              onRematch={requestRematch}
+              canRematch={canRequestRematch}
+              rematchBusy={rematchBusy}
             />
 
             <PveDropsModal
@@ -2062,6 +2251,9 @@ export default function HomePage() {
               rewardCards={pveResultModal?.rewardCards ?? []}
               onLeave={returnToHome}
               onClose={() => setPveResultModal(null)}
+              onRematch={requestRematch}
+              canRematch={canRequestRematch}
+              rematchBusy={rematchBusy}
             />
 
             {activePrompt && (

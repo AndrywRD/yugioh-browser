@@ -8,13 +8,16 @@ interface EndScreenProps {
   won: boolean;
   onLeave: () => void;
   onDismiss: () => void;
+  onRematch?: () => void;
+  canRematch?: boolean;
+  rematchBusy?: boolean;
 }
 
 function cx(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-export function EndScreen({ visible, won, onLeave, onDismiss }: EndScreenProps) {
+export function EndScreen({ visible, won, onLeave, onDismiss, onRematch, canRematch = false, rematchBusy = false }: EndScreenProps) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -40,6 +43,16 @@ export function EndScreen({ visible, won, onLeave, onDismiss }: EndScreenProps) 
         </p>
 
         <div className="mt-6 flex justify-center gap-3">
+          {canRematch ? (
+            <button
+              type="button"
+              onClick={onRematch}
+              disabled={rematchBusy}
+              className="rounded-lg border border-cyan-300/65 bg-cyan-700/80 px-4 py-2 text-sm font-semibold text-cyan-50 disabled:cursor-not-allowed disabled:opacity-45 hover:bg-cyan-600"
+            >
+              {rematchBusy ? "Iniciando..." : "Revanche"}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onLeave}
