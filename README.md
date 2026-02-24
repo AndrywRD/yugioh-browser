@@ -40,6 +40,12 @@ python scripts/create_sample_data.py
 uvicorn src.presentation.api.main:app --reload
 ```
 
+For development tooling/tests, install:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 API docs: `http://localhost:8000/docs`
 
 Default admin:

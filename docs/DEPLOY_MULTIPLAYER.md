@@ -15,6 +15,8 @@ No Render:
    - Root Directory: *(vazio)*
    - Build Command: `pip install -r requirements.txt`
    - Start Command: `alembic upgrade head && uvicorn src.presentation.api.main:app --host 0.0.0.0 --port $PORT`
+5. Em **Environment**, adicione:
+   - `PYTHON_VERSION=3.11.10`
 
 ### 0.2 Frontend (Static Site)
 
@@ -44,6 +46,7 @@ Depois, copie as URLs de conexao para as envs do backend.
 ### 0.4 Variaveis de ambiente
 
 #### Backend
+- `PYTHON_VERSION=3.11.10`
 - `ENVIRONMENT=production`
 - `DEBUG=false`
 - `SECRET_KEY=<valor-forte>`

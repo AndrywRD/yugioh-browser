@@ -7,7 +7,7 @@ name = "kpi-dashboard"
 version = "1.0.0"
 description = "Business Intelligence platform for KPI dashboards and ETL pipelines"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 authors = [
   { name = "KPI Dashboard Team" }
 ]
