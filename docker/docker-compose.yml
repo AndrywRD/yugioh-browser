@@ -1,0 +1,103 @@
+version: "3.9"
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      POSTGRES_USER: kpi_user
+      POSTGRES_PASSWORD: kpi_password
+      POSTGRES_DB: kpi_dashboard
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://kpi_user:kpi_password@db:5432/kpi_dashboard
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: super-secret-key
+      ENCRYPTION_KEY: local-encryption-key
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      CORS_ORIGINS: http://localhost:5173
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: admin123
+      ADMIN_FULL_NAME: Admin User
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+      - minio
+
+  celery_worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: celery -A src.infrastructure.messaging.celery_config.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://kpi_user:kpi_password@db:5432/kpi_dashboard
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      ENCRYPTION_KEY: local-encryption-key
+    depends_on:
+      - app
+
+  celery_beat:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: celery -A src.infrastructure.messaging.celery_config.celery_app beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://kpi_user:kpi_password@db:5432/kpi_dashboard
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      ENCRYPTION_KEY: local-encryption-key
+    depends_on:
+      - app
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - app
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

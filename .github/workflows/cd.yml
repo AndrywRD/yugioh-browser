@@ -1,0 +1,19 @@
+name: CD
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -f docker/Dockerfile -t kpi-dashboard-backend:${GITHUB_SHA} .
+      - name: Build frontend image
+        run: docker build -f docker/Dockerfile.frontend -t kpi-dashboard-frontend:${GITHUB_SHA} .
+      - name: Deploy placeholder
+        run: echo "Configure deployment target (Railway/Render/Kubernetes) here."
