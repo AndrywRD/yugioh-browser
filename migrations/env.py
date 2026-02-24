@@ -7,8 +7,15 @@ from sqlalchemy import engine_from_config, pool
 
 from src.infrastructure.persistence.database import Base
 from src.infrastructure.persistence.models import *  # noqa: F403,F401
+from src.shared.config import get_settings
 
 config = context.config
+settings = get_settings()
+
+# Ensure Alembic uses the same database URL as the application runtime.
+# This is required in production platforms (e.g. Render) where DATABASE_URL
+# is injected via environment variables.
+config.set_main_option("sqlalchemy.url", settings.database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
