@@ -1,0 +1,29 @@
+{
+  "name": "ruptura-arcana",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run -w @ruptura-arcana/web dev",
+    "dev:server": "npm run -w @ruptura-arcana/server dev",
+    "dev:all": "concurrently -k -n SERVER,WEB -c yellow,cyan \"npm run dev:server\" \"npm run dev:web\"",
+    "db:up": "npm run -w @ruptura-arcana/server db:up",
+    "db:down": "npm run -w @ruptura-arcana/server db:down",
+    "db:push": "npm run -w @ruptura-arcana/server prisma:push",
+    "db:seed": "npm run -w @ruptura-arcana/server prisma:seed",
+    "setup:sql": "npm run db:up && npm run -w @ruptura-arcana/server prisma:generate && npm run db:push && npm run db:seed",
+    "generate:fm-cards": "node scripts/generate-fm-catalog.mjs",
+    "generate:fm-fusions": "node scripts/generate-fm-fusions.mjs",
+    "generate:all": "npm run generate:fm-cards && npm run generate:fm-fusions",
+    "check:all": "npm run test && npm run build",
+    "run:all": "npm run generate:all && npm run check:all && npm run dev:all",
+    "build": "npm run --workspaces build",
+    "test": "npm run -w @ruptura-arcana/game test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

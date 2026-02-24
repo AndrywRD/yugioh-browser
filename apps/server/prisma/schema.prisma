@@ -1,0 +1,198 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CardKind {
+  MONSTER
+  SPELL
+  TRAP
+}
+
+enum MatchMode {
+  PVE
+  PVP
+}
+
+enum MatchResult {
+  WIN
+  LOSS
+  QUIT
+}
+
+enum ShopPurchaseSource {
+  SINGLE
+  BOOSTER_BEGINNER
+  BOOSTER_INTERMEDIATE
+  BOOSTER_ADVANCED
+}
+
+model Player {
+  id            String         @id @default(uuid())
+  publicId      String         @unique
+  username      String
+  gold          Int            @default(0)
+  winsPve       Int            @default(0)
+  winsPvp       Int            @default(0)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  lastSeenAt    DateTime       @default(now())
+  cards         PlayerCard[]
+  decks         Deck[]
+  fusionLog     FusionDiscovery[]
+  authAccount   AuthAccount?
+  matchesAsSelf MatchHistory[] @relation("PlayerMatchHistory")
+  matchesAsOpp  MatchHistory[] @relation("OpponentMatchHistory")
+  shopState     PlayerShopState?
+  shopTx        ShopTransaction[]
+
+  @@index([lastSeenAt])
+}
+
+model AuthAccount {
+  id           String   @id @default(uuid())
+  login        String   @unique
+  passwordHash String
+  passwordSalt String
+  playerId     String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  player       Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([login])
+}
+
+model FusionDiscovery {
+  id             String   @id @default(uuid())
+  playerId       String
+  key            String
+  materialsCount Int
+  materialTags   Json
+  materialCardIds Json?
+  resultCardId   String
+  resultName     String
+  discoveredAt   DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  times          Int      @default(1)
+  player         Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, key])
+  @@index([playerId, discoveredAt])
+  @@index([playerId, resultCardId])
+}
+
+model Card {
+  id            String      @id
+  name          String
+  atk           Int         @default(0)
+  def           Int         @default(0)
+  kind          CardKind
+  tags          Json
+  rarity        String?
+  imagePath     String?
+  effectKey     String?
+  effectDesc    String?
+  password      String?
+  cost          Int?
+  catalogNumber Int?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  playerCards   PlayerCard[]
+  shopTx        ShopTransaction[]
+}
+
+model PlayerCard {
+  id        String   @id @default(uuid())
+  playerId  String
+  cardId    String
+  count     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  card      Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, cardId])
+  @@index([playerId])
+  @@index([cardId])
+}
+
+model Deck {
+  id        String   @id @default(uuid())
+  playerId  String
+  name      String
+  cards     Json
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId])
+  @@index([playerId, isActive])
+}
+
+model Npc {
+  id                String         @id
+  name              String
+  tier              Int            @default(0)
+  rewardGold        Int            @default(0)
+  rewardCards       Json
+  deck              Json
+  unlockRequirement Json
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  matches           MatchHistory[]
+
+  @@index([tier])
+}
+
+model MatchHistory {
+  id               String      @id @default(uuid())
+  mode             MatchMode
+  playerId         String
+  opponentNpcId    String?
+  opponentPlayerId String?
+  result           MatchResult
+  rewardClaimed    Boolean     @default(false)
+  rewardGold       Int         @default(0)
+  rewardCards      Json?
+  endedAt          DateTime    @default(now())
+  player           Player      @relation("PlayerMatchHistory", fields: [playerId], references: [id], onDelete: Cascade)
+  opponentPlayer   Player?     @relation("OpponentMatchHistory", fields: [opponentPlayerId], references: [id], onDelete: SetNull)
+  opponentNpc      Npc?        @relation(fields: [opponentNpcId], references: [id], onDelete: SetNull)
+
+  @@index([playerId, endedAt])
+  @@index([opponentNpcId, endedAt])
+  @@index([mode, result, endedAt])
+}
+
+model PlayerShopState {
+  id          String   @id @default(uuid())
+  playerId    String   @unique
+  rotationDay String
+  rerollCount Int      @default(0)
+  rerollNonce Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  player      Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([rotationDay])
+}
+
+model ShopTransaction {
+  id        String             @id @default(uuid())
+  playerId  String
+  cardId    String
+  source    ShopPurchaseSource
+  price     Int
+  createdAt DateTime           @default(now())
+  player    Player             @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  card      Card               @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([playerId, createdAt])
+  @@index([cardId, createdAt])
+  @@index([source, createdAt])
+}

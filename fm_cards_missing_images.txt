@@ -1,0 +1,17 @@
+FM CARD IMPORT REPORT
+=====================
+Total cards in fm_cards.txt: 722
+Total PNG images found: 723
+Cards with image: 722
+Cards without image: 0
+Total cards generated: 722
+Unused image files: 1
+Deck templates generated: 40
+
+MISSING IMAGES (cards not imported)
+-----------------------------------
+
+UNUSED IMAGE FILES
+------------------
+Back-FMR-EN-VG.png
+
