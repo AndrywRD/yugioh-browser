@@ -5,21 +5,34 @@ import type { Deck } from "@ruptura-arcana/shared";
 export const PUBLIC_ID_STORAGE_KEY = "ruptura_arcana_player_id";
 
 const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:3333";
+const REQUEST_TIMEOUT_MS = Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS ?? 20000);
 
 function buildUrl(path: string): string {
   return `${SERVER_URL}${path}`;
 }
 
 async function fetchWithNetworkHint(path: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(buildUrl(path), init);
+    return await fetch(buildUrl(path), {
+      ...init,
+      signal: init?.signal ?? controller.signal
+    });
   } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(
+        "Tempo limite de conexao excedido. O backend pode estar acordando do idle. Aguarde alguns segundos e tente novamente."
+      );
+    }
     if (error instanceof TypeError) {
       throw new Error(
         "Falha de conexao com o servidor. Verifique NEXT_PUBLIC_SERVER_URL no frontend e WEB_ORIGIN no backend."
       );
     }
     throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
   }
 }
 
@@ -308,7 +321,7 @@ export async function helloPlayer(input: { publicId?: string; username?: string 
 }
 
 export async function fetchPlayerProfile(publicId: string): Promise<PlayerProfile> {
-  const response = await fetch(buildUrl("/api/player/profile"), {
+  const response = await fetchWithNetworkHint("/api/player/profile", {
     method: "GET",
     headers: withPlayerHeader(publicId)
   });
@@ -317,7 +330,7 @@ export async function fetchPlayerProfile(publicId: string): Promise<PlayerProfil
 }
 
 export async function updatePlayerProfile(publicId: string, username: string): Promise<PlayerProfile> {
-  const response = await fetch(buildUrl("/api/player/profile"), {
+  const response = await fetchWithNetworkHint("/api/player/profile", {
     method: "PATCH",
     headers: {
       "content-type": "application/json",
@@ -330,7 +343,7 @@ export async function updatePlayerProfile(publicId: string, username: string): P
 }
 
 export async function fetchProgression(publicId: string): Promise<ProgressionResponse> {
-  const response = await fetch(buildUrl("/api/progression"), {
+  const response = await fetchWithNetworkHint("/api/progression", {
     method: "GET",
     headers: withPlayerHeader(publicId)
   });
@@ -338,7 +351,7 @@ export async function fetchProgression(publicId: string): Promise<ProgressionRes
 }
 
 export async function claimDailyMissionReward(publicId: string, missionKey: string): Promise<ProgressionResponse> {
-  const response = await fetch(buildUrl(`/api/progression/missions/${encodeURIComponent(missionKey)}/claim`), {
+  const response = await fetchWithNetworkHint(`/api/progression/missions/${encodeURIComponent(missionKey)}/claim`, {
     method: "POST",
     headers: withPlayerHeader(publicId)
   });
@@ -346,7 +359,7 @@ export async function claimDailyMissionReward(publicId: string, missionKey: stri
 }
 
 export async function resetPlayerProgress(publicId: string): Promise<{ player: PlayerProfile; decks: DeckListResponse }> {
-  const response = await fetch(buildUrl("/api/player/reset"), {
+  const response = await fetchWithNetworkHint("/api/player/reset", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -357,7 +370,7 @@ export async function resetPlayerProgress(publicId: string): Promise<{ player: P
 }
 
 export async function fetchDecks(publicId: string): Promise<DeckListResponse> {
-  const response = await fetch(buildUrl("/api/decks"), {
+  const response = await fetchWithNetworkHint("/api/decks", {
     method: "GET",
     headers: withPlayerHeader(publicId)
   });
@@ -365,7 +378,7 @@ export async function fetchDecks(publicId: string): Promise<DeckListResponse> {
 }
 
 export async function saveDeckOnServer(publicId: string, deck: Deck): Promise<DeckListResponse> {
-  const response = await fetch(buildUrl("/api/decks"), {
+  const response = await fetchWithNetworkHint("/api/decks", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -377,7 +390,7 @@ export async function saveDeckOnServer(publicId: string, deck: Deck): Promise<De
 }
 
 export async function deleteDeckOnServer(publicId: string, deckId: string): Promise<DeckListResponse> {
-  const response = await fetch(buildUrl(`/api/decks/${deckId}`), {
+  const response = await fetchWithNetworkHint(`/api/decks/${deckId}`, {
     method: "DELETE",
     headers: withPlayerHeader(publicId)
   });
@@ -385,7 +398,7 @@ export async function deleteDeckOnServer(publicId: string, deckId: string): Prom
 }
 
 export async function setActiveDeckOnServer(publicId: string, deckId: string): Promise<DeckListResponse> {
-  const response = await fetch(buildUrl(`/api/decks/${deckId}/active`), {
+  const response = await fetchWithNetworkHint(`/api/decks/${deckId}/active`, {
     method: "POST",
     headers: withPlayerHeader(publicId)
   });
@@ -393,7 +406,7 @@ export async function setActiveDeckOnServer(publicId: string, deckId: string): P
 }
 
 export async function fetchCollection(publicId: string): Promise<CollectionEntry[]> {
-  const response = await fetch(buildUrl("/api/collection"), {
+  const response = await fetchWithNetworkHint("/api/collection", {
     method: "GET",
     headers: withPlayerHeader(publicId)
   });
@@ -402,7 +415,7 @@ export async function fetchCollection(publicId: string): Promise<CollectionEntry
 }
 
 export async function fetchShopOffers(publicId: string, limit = 20): Promise<ShopListResponse> {
-  const response = await fetch(buildUrl(`/api/shop/offers?limit=${encodeURIComponent(String(limit))}`), {
+  const response = await fetchWithNetworkHint(`/api/shop/offers?limit=${encodeURIComponent(String(limit))}`, {
     method: "GET",
     headers: withPlayerHeader(publicId)
   });
@@ -410,7 +423,7 @@ export async function fetchShopOffers(publicId: string, limit = 20): Promise<Sho
 }
 
 export async function fetchShopConfig(): Promise<ShopConfig> {
-  const response = await fetch(buildUrl("/api/shop/config"), {
+  const response = await fetchWithNetworkHint("/api/shop/config", {
     method: "GET"
   });
   const payload = await parseJsonResponse<{ config: ShopConfig }>(response);
@@ -418,7 +431,7 @@ export async function fetchShopConfig(): Promise<ShopConfig> {
 }
 
 export async function purchaseShopCard(publicId: string, cardId: string): Promise<ShopPurchaseResult> {
-  const response = await fetch(buildUrl("/api/shop/purchase"), {
+  const response = await fetchWithNetworkHint("/api/shop/purchase", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -430,7 +443,7 @@ export async function purchaseShopCard(publicId: string, cardId: string): Promis
 }
 
 export async function rerollShopOffers(publicId: string, limit = 20): Promise<ShopRerollResult> {
-  const response = await fetch(buildUrl("/api/shop/reroll"), {
+  const response = await fetchWithNetworkHint("/api/shop/reroll", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -442,7 +455,7 @@ export async function rerollShopOffers(publicId: string, limit = 20): Promise<Sh
 }
 
 export async function openShopBooster(publicId: string, packType: BoosterPackType): Promise<ShopBoosterResult> {
-  const response = await fetch(buildUrl("/api/shop/booster/open"), {
+  const response = await fetchWithNetworkHint("/api/shop/booster/open", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -454,7 +467,7 @@ export async function openShopBooster(publicId: string, packType: BoosterPackTyp
 }
 
 export async function fetchPveNpcs(publicId: string): Promise<PveNpc[]> {
-  const response = await fetch(buildUrl("/api/pve/npcs"), {
+  const response = await fetchWithNetworkHint("/api/pve/npcs", {
     method: "GET",
     headers: withPlayerHeader(publicId)
   });
@@ -463,7 +476,7 @@ export async function fetchPveNpcs(publicId: string): Promise<PveNpc[]> {
 }
 
 export async function fetchPveDropProgress(publicId: string): Promise<PveDropProgress[]> {
-  const response = await fetch(buildUrl("/api/pve/drops"), {
+  const response = await fetchWithNetworkHint("/api/pve/drops", {
     method: "GET",
     headers: withPlayerHeader(publicId)
   });
@@ -472,7 +485,7 @@ export async function fetchPveDropProgress(publicId: string): Promise<PveDropPro
 }
 
 export async function startPveMatch(publicId: string, npcId: string): Promise<{ roomCode: string; npc: { id: string; name: string; tier: number } }> {
-  const response = await fetch(buildUrl("/api/pve/start"), {
+  const response = await fetchWithNetworkHint("/api/pve/start", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -484,7 +497,7 @@ export async function startPveMatch(publicId: string, npcId: string): Promise<{ 
 }
 
 export async function fetchFusionLog(publicId: string): Promise<FusionDiscoveryEntry[]> {
-  const response = await fetch(buildUrl("/api/fusions/log"), {
+  const response = await fetchWithNetworkHint("/api/fusions/log", {
     method: "GET",
     headers: withPlayerHeader(publicId)
   });
@@ -503,7 +516,7 @@ export async function syncFusionLog(
     resultName: string;
   }>
 ): Promise<FusionDiscoveryEntry[]> {
-  const response = await fetch(buildUrl("/api/fusions/sync"), {
+  const response = await fetchWithNetworkHint("/api/fusions/sync", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -519,7 +532,7 @@ export async function testFusion(
   publicId: string,
   materials: string[]
 ): Promise<FusionTestResult> {
-  const response = await fetch(buildUrl("/api/fusions/test"), {
+  const response = await fetchWithNetworkHint("/api/fusions/test", {
     method: "POST",
     headers: {
       "content-type": "application/json",
