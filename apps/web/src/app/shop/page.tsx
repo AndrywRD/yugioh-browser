@@ -178,7 +178,7 @@ export default function ShopPage() {
   };
 
   return (
-    <main className="fm-screen fm-noise-overlay lobby-readable relative h-screen overflow-y-auto overflow-x-hidden text-slate-100">
+    <main className="fm-screen fm-noise-overlay lobby-readable relative min-h-[100dvh] overflow-y-auto overflow-x-hidden text-slate-100">
       <div className="mx-auto w-full max-w-[1800px] p-3 sm:p-4">
         <div className="space-y-3 rounded-2xl border border-[#d1a95b]/45 bg-[linear-gradient(180deg,rgba(4,11,27,0.86),rgba(3,9,22,0.92))] p-4 shadow-[0_18px_64px_rgba(0,0,0,0.62)]">
           <header className="flex flex-wrap items-center justify-between gap-2">

@@ -133,7 +133,11 @@ interface BattleResolvedPayload {
   defenderSlot?: number;
   mode?: "DIRECT" | "EFFECT_DESTROY";
   damage?: number;
-  destroyed?: Array<{ playerId: string; slot: number }>;
+  reason?: string;
+  targetPlayerId?: string;
+  slot?: number;
+  instanceId?: string;
+  destroyed?: Array<{ playerId: string; slot: number; instanceId?: string }>;
 }
 
 interface SpellTrapActivatedPayload {
@@ -142,6 +146,11 @@ interface SpellTrapActivatedPayload {
   effectKey?: string;
   targetMonsterSlot?: number;
   targetPlayerId?: string;
+  continuous?: boolean;
+}
+
+interface CardDrawnPayload {
+  instanceId?: string;
 }
 
 interface TutorialObjectiveState {
@@ -209,6 +218,18 @@ function resolveLpRectIdForSide(side: "YOU" | "OPP"): "hud:lp:you" | "hud:lp:opp
 
 function resolveSideToHud(side: BoardSide): "YOU" | "OPP" {
   return side === "PLAYER" ? "YOU" : "OPP";
+}
+
+function resolveDeckZoneRectId(side: BoardSide): "zone:deck:player" | "zone:deck:enemy" {
+  return side === "PLAYER" ? "zone:deck:player" : "zone:deck:enemy";
+}
+
+function resolveGraveZoneRectId(side: BoardSide): "zone:grave:player" | "zone:grave:enemy" {
+  return side === "PLAYER" ? "zone:grave:player" : "zone:grave:enemy";
+}
+
+function resolveHandZoneRectId(side: BoardSide): "zone:hand:player" | "zone:hand:enemy" {
+  return side === "PLAYER" ? "zone:hand:player" : "zone:hand:enemy";
 }
 
 function resolveDirectAttackCenterRect(attackerSide: BoardSide, boardRoot: HTMLElement | null): DOMRect | null {
@@ -426,6 +447,7 @@ export default function HomePage() {
   const [tutorialCompleting, setTutorialCompleting] = useState(false);
   const [matchPrompt, setMatchPrompt] = useState<MatchPromptState | null>(null);
   const [waitingAttackResolution, setWaitingAttackResolution] = useState(false);
+  const [isMobileLayout, setIsMobileLayout] = useState(false);
   const pendingFusionSlotRef = useRef<number | null>(null);
   const endSfxPlayedRef = useRef<DuelOutcome | null>(null);
   const autoJoinAttemptedRef = useRef(false);
@@ -438,10 +460,21 @@ export default function HomePage() {
   const fusionAnimatingRef = useRef(false);
   const pendingFusionSnapshotVersionRef = useRef<number | null>(null);
   const deferredSnapshotRef = useRef<SnapshotPacket | null>(null);
+  const lastAppliedSnapshotVersionRef = useRef(0);
+  const pendingVisualAnimationsRef = useRef(0);
+  const drawSyncVersionRef = useRef<number | null>(null);
+  const turnIntroRunningRef = useRef(false);
+  const turnIntroStartVersionRef = useRef<number | null>(null);
+  const latestTurnPlayerFromEventsRef = useRef<string | null>(null);
+  const latestEventVersionRef = useRef(0);
+  const pendingSnapshotHoldRef = useRef<SnapshotPacket | null>(null);
+  const pendingSnapshotHoldTimerRef = useRef<number | null>(null);
 
   const applySnapshotPacket = useCallback((packet: SnapshotPacket) => {
     setSnapshot(packet.state);
     snapshotRef.current = packet.state;
+    lastAppliedSnapshotVersionRef.current = packet.version;
+    latestTurnPlayerFromEventsRef.current = packet.state.turn.playerId;
     const pending = packet.state.pendingPrompt;
     if (!pending) {
       setMatchPrompt(null);
@@ -457,6 +490,67 @@ export default function HomePage() {
     }
     setGameError("");
   }, []);
+
+  const flushDeferredSnapshotIfReady = useCallback(() => {
+    if (fusionAnimatingRef.current) return;
+    if (turnIntroRunningRef.current) return;
+    if (drawSyncVersionRef.current !== null) return;
+    if (pendingVisualAnimationsRef.current > 0) return;
+    const deferred = deferredSnapshotRef.current;
+    if (!deferred) return;
+    if (snapshotRef.current && deferred.version > latestEventVersionRef.current) return;
+    applySnapshotPacket(deferred);
+    deferredSnapshotRef.current = null;
+  }, [applySnapshotPacket]);
+
+  const clearPendingSnapshotHold = useCallback(() => {
+    pendingSnapshotHoldRef.current = null;
+    if (pendingSnapshotHoldTimerRef.current !== null) {
+      window.clearTimeout(pendingSnapshotHoldTimerRef.current);
+      pendingSnapshotHoldTimerRef.current = null;
+    }
+  }, []);
+
+  const holdSnapshotBrieflyForEvents = useCallback(
+    (packet: SnapshotPacket) => {
+      pendingSnapshotHoldRef.current = packet;
+      if (pendingSnapshotHoldTimerRef.current !== null) {
+        window.clearTimeout(pendingSnapshotHoldTimerRef.current);
+      }
+      pendingSnapshotHoldTimerRef.current = window.setTimeout(() => {
+        const held = pendingSnapshotHoldRef.current;
+        if (!held || held.version !== packet.version) return;
+        if (
+          !fusionAnimatingRef.current &&
+          !turnIntroRunningRef.current &&
+          drawSyncVersionRef.current === null &&
+          pendingVisualAnimationsRef.current === 0
+        ) {
+          applySnapshotPacket(held);
+        } else {
+          deferredSnapshotRef.current = held;
+        }
+        pendingSnapshotHoldRef.current = null;
+        pendingSnapshotHoldTimerRef.current = null;
+      }, 140);
+    },
+    [applySnapshotPacket]
+  );
+
+  const enqueueVisualAnimation = useCallback(
+    (_version: number, task: () => Promise<void>) => {
+      pendingVisualAnimationsRef.current += 1;
+      void animationQueueRef.current.enqueue(async () => {
+        try {
+          await task();
+        } finally {
+          pendingVisualAnimationsRef.current = Math.max(0, pendingVisualAnimationsRef.current - 1);
+          flushDeferredSnapshotIfReady();
+        }
+      });
+    },
+    [flushDeferredSnapshotIfReady]
+  );
 
   const meInRoom = useMemo(
     () => roomState?.players.find((player) => player.playerId === playerId) ?? null,
@@ -938,6 +1032,16 @@ export default function HomePage() {
   }, [usernameFromQuery]);
 
   useEffect(() => {
+    const syncLayout = () => {
+      setIsMobileLayout(window.matchMedia("(max-width: 1023px)").matches);
+    };
+
+    syncLayout();
+    window.addEventListener("resize", syncLayout);
+    return () => window.removeEventListener("resize", syncLayout);
+  }, []);
+
+  useEffect(() => {
     if (!tutorialLesson) {
       setTutorialObjectives([]);
       return;
@@ -1051,9 +1155,23 @@ export default function HomePage() {
       setRematchBusy(false);
     });
     socket.on("game:snapshot", (payload: SnapshotPacket) => {
-      const pendingVersion = pendingFusionSnapshotVersionRef.current;
-      if (fusionAnimatingRef.current && pendingVersion !== null && payload.version >= pendingVersion) {
+      const pendingFusionVersion = pendingFusionSnapshotVersionRef.current;
+      const shouldDeferFusion =
+        fusionAnimatingRef.current && pendingFusionVersion !== null && payload.version >= pendingFusionVersion;
+      const shouldDeferDrawSync = drawSyncVersionRef.current !== null && payload.version === drawSyncVersionRef.current;
+      const shouldDeferTurnIntro =
+        turnIntroRunningRef.current &&
+        turnIntroStartVersionRef.current !== null &&
+        payload.version > turnIntroStartVersionRef.current;
+      const shouldDeferWhileVisualQueueBusy =
+        pendingVisualAnimationsRef.current > 0 && payload.version > lastAppliedSnapshotVersionRef.current;
+      if (shouldDeferFusion || shouldDeferDrawSync || shouldDeferTurnIntro || shouldDeferWhileVisualQueueBusy) {
         deferredSnapshotRef.current = payload;
+        return;
+      }
+      const shouldHoldForEventSync = Boolean(snapshotRef.current) && payload.version > latestEventVersionRef.current;
+      if (shouldHoldForEventSync) {
+        holdSnapshotBrieflyForEvents(payload);
         return;
       }
       applySnapshotPacket(payload);
@@ -1065,6 +1183,11 @@ export default function HomePage() {
       });
     });
     socket.on("game:events", (payload: { version: number; events: GameEvent[] }) => {
+      latestEventVersionRef.current = Math.max(latestEventVersionRef.current, payload.version);
+      if (pendingSnapshotHoldRef.current && pendingSnapshotHoldRef.current.version <= latestEventVersionRef.current) {
+        deferredSnapshotRef.current = pendingSnapshotHoldRef.current;
+        clearPendingSnapshotHold();
+      }
       const fusionEvent = payload.events.find((event) => event.type === "FUSION_RESOLVED" || event.type === "FUSION_FAILED");
       let fusionAnimationScheduled = false;
       if (fusionEvent && snapshotRef.current) {
@@ -1073,7 +1196,7 @@ export default function HomePage() {
           fusionAnimationScheduled = true;
           pendingFusionSnapshotVersionRef.current = payload.version;
           fusionAnimatingRef.current = true;
-          void animationQueueRef.current.enqueue(async () => {
+          enqueueVisualAnimation(payload.version, async () => {
             try {
               await playFusionAnimation(fusionOverlayRef.current, rectRegistry, animationRequest, {
                 onImpact: () => sfx.play("fusion"),
@@ -1081,13 +1204,8 @@ export default function HomePage() {
               });
             } finally {
               fusionAnimatingRef.current = false;
-              const pendingVersion = pendingFusionSnapshotVersionRef.current;
-              const deferred = deferredSnapshotRef.current;
-              if (pendingVersion !== null && deferred && deferred.version >= pendingVersion) {
-                applySnapshotPacket(deferred);
-                deferredSnapshotRef.current = null;
-              }
               pendingFusionSnapshotVersionRef.current = null;
+              flushDeferredSnapshotIfReady();
             }
           });
         }
@@ -1096,6 +1214,8 @@ export default function HomePage() {
       const translated = payload.events.map((event) => eventToText(event, playerId));
       setLogs((prev) => [...translated.map((line) => withTimestamp(line)), ...prev].slice(0, 100));
       setTickerLines((prev) => [...translated, ...prev].slice(0, 8));
+      const drawEvents: Array<{ side: BoardSide; instanceId?: string }> = [];
+      let turnBannerSide: "player" | "enemy" | null = null;
 
       for (const event of payload.events) {
         if (tutorialLessonId && playerId) {
@@ -1135,6 +1255,16 @@ export default function HomePage() {
           continue;
         }
 
+        if (event.type === "CARD_DRAWN" && event.playerId && playerId) {
+          const drawPayload = event.payload as CardDrawnPayload | undefined;
+          const side: BoardSide = event.playerId === playerId ? "PLAYER" : "ENEMY";
+          drawEvents.push({
+            side,
+            instanceId: typeof drawPayload?.instanceId === "string" ? drawPayload.instanceId : undefined
+          });
+          continue;
+        }
+
         if (
           (event.type === "MONSTER_SUMMONED" || event.type === "MONSTER_FLIP_SUMMONED") &&
           typeof (event.payload as { slot?: number } | undefined)?.slot === "number" &&
@@ -1147,7 +1277,7 @@ export default function HomePage() {
 
           const summonPayload = event.payload as { slot: number; instanceId?: string };
           const slotRectId = buildSlotRectId(side, "MONSTER", slot);
-          void animationQueueRef.current.enqueue(async () => {
+          enqueueVisualAnimation(payload.version, async () => {
             await new Promise((resolve) => window.setTimeout(resolve, 90));
             const slotRect = rectRegistry.getSlotRect(slotRectId);
             if (!slotRect) return;
@@ -1247,7 +1377,7 @@ export default function HomePage() {
             if (rect) {
               const frontImagePath =
                 typeof revealPayload.templateId === "string" ? CARD_INDEX[revealPayload.templateId]?.imagePath : undefined;
-              void animationQueueRef.current.enqueue(async () => {
+              enqueueVisualAnimation(payload.version, async () => {
                 await duelFx.flipReveal(fusionOverlayRef.current, {
                   cardRect: rect,
                   frontImagePath
@@ -1281,7 +1411,7 @@ export default function HomePage() {
                 side === "PLAYER"
                   ? snapshotRef.current?.you.monsterZone[declared.attackerSlot]?.imagePath
                   : snapshotRef.current?.opponent.monsterZone[declared.attackerSlot]?.imagePath;
-              void animationQueueRef.current.enqueue(async () => {
+              enqueueVisualAnimation(payload.version, async () => {
                 await duelFx.attackDash(fusionOverlayRef.current, {
                   attackerRect,
                   targetRect,
@@ -1324,6 +1454,39 @@ export default function HomePage() {
             }
           }
 
+          const destroyTargets: Array<{ side: BoardSide; slot: number }> = [];
+          if (Array.isArray(battle?.destroyed) && playerId) {
+            for (const destroyed of battle.destroyed) {
+              destroyTargets.push({ side: destroyed.playerId === playerId ? "PLAYER" : "ENEMY", slot: destroyed.slot });
+            }
+          } else if (
+            battle?.mode === "EFFECT_DESTROY" &&
+            typeof battle.slot === "number" &&
+            typeof battle.targetPlayerId === "string" &&
+            playerId
+          ) {
+            destroyTargets.push({ side: battle.targetPlayerId === playerId ? "PLAYER" : "ENEMY", slot: battle.slot });
+          }
+
+          if (destroyTargets.length) {
+            enqueueVisualAnimation(payload.version, async () => {
+              for (const [index, target] of destroyTargets.entries()) {
+                const cardRect = rectRegistry.getSlotRect(buildSlotRectId(target.side, "MONSTER", target.slot));
+                const graveRect = rectRegistry.getSlotRect(resolveGraveZoneRectId(target.side));
+                if (!cardRect || !graveRect) continue;
+                await duelFx.destroyCard(fusionOverlayRef.current, {
+                  cardRect,
+                  graveRect,
+                  strength: battle?.mode === "EFFECT_DESTROY" ? 3 : 2,
+                  boardRoot: boardAnimRootRef.current
+                });
+                if (index < destroyTargets.length - 1) {
+                  await new Promise((resolve) => window.setTimeout(resolve, 40));
+                }
+              }
+            });
+          }
+
           let impactRect: DOMRect | null = null;
           if (battle?.mode === "DIRECT" && event.playerId && playerId) {
             const attackerSide: BoardSide = event.playerId === playerId ? "PLAYER" : "ENEMY";
@@ -1335,7 +1498,7 @@ export default function HomePage() {
             impactRect = rectRegistry.getSlotRect(buildSlotRectId(defenderSide, "MONSTER", battle.defenderSlot));
           }
           if (impactRect) {
-            void animationQueueRef.current.enqueue(async () => {
+            enqueueVisualAnimation(payload.version, async () => {
               await duelFx.impactFrames(fusionOverlayRef.current, {
                 focusRect: impactRect,
                 strength: battle?.mode === "DIRECT" ? 2 : 1,
@@ -1404,22 +1567,83 @@ export default function HomePage() {
           }
 
           if (fromRect && toRect) {
-            void animationQueueRef.current.enqueue(async () => {
+            enqueueVisualAnimation(payload.version, async () => {
               await duelFx.linkBeam(fusionOverlayRef.current, {
                 fromRect,
                 toRect
               });
             });
           }
+
+          if (activated?.source === "SET" && typeof activated.slot === "number" && !activated.continuous) {
+            const spellRect = rectRegistry.getSlotRect(buildSlotRectId(casterSide, "SPELL_TRAP", activated.slot));
+            const graveRect = rectRegistry.getSlotRect(resolveGraveZoneRectId(casterSide));
+            if (spellRect && graveRect) {
+              enqueueVisualAnimation(payload.version, async () => {
+                await duelFx.sendToGrave(fusionOverlayRef.current, {
+                  cardRect: spellRect,
+                  destRect: graveRect,
+                  strength: 1
+                });
+              });
+            }
+          }
           continue;
         }
 
         if (event.type === "TURN_CHANGED") {
           setWaitingAttackResolution(false);
+          if (event.playerId && playerId) {
+            turnBannerSide = event.playerId === playerId ? "player" : "enemy";
+          }
           sfx.play("end_turn");
           continue;
         }
       }
+
+      if (turnBannerSide || drawEvents.length > 0) {
+        drawSyncVersionRef.current = payload.version;
+        turnIntroRunningRef.current = Boolean(turnBannerSide);
+        turnIntroStartVersionRef.current = turnBannerSide ? payload.version : null;
+        enqueueVisualAnimation(payload.version, async () => {
+          try {
+            if (turnBannerSide) {
+              await duelFx.playTurnBanner(fusionOverlayRef.current, { side: turnBannerSide, phase: "MAIN" });
+            }
+            for (const [index, drawEvent] of drawEvents.entries()) {
+              const deckRect = rectRegistry.getSlotRect(resolveDeckZoneRectId(drawEvent.side));
+              const handRect = rectRegistry.getSlotRect(resolveHandZoneRectId(drawEvent.side));
+              if (!deckRect || !handRect) continue;
+
+              let cardTexture: string | undefined;
+              if (drawEvent.side === "PLAYER" && drawEvent.instanceId && snapshotRef.current) {
+                cardTexture = findCardByInstanceId(snapshotRef.current, drawEvent.instanceId)?.imagePath;
+              }
+
+              await duelFx.drawToHand(fusionOverlayRef.current, {
+                deckRect,
+                handRectOrSlot: handRect,
+                cardTexture
+              });
+
+              if (index < drawEvents.length - 1) {
+                await new Promise((resolve) => window.setTimeout(resolve, 70));
+              }
+            }
+          } finally {
+            if (turnIntroStartVersionRef.current === payload.version) {
+              turnIntroRunningRef.current = false;
+              turnIntroStartVersionRef.current = null;
+            }
+            if (drawSyncVersionRef.current === payload.version) {
+              drawSyncVersionRef.current = null;
+            }
+            flushDeferredSnapshotIfReady();
+          }
+        });
+      }
+
+      flushDeferredSnapshotIfReady();
     });
     socket.on("game:error", (payload: { message: string }) => {
       setGameError(payload.message);
@@ -1450,6 +1674,7 @@ export default function HomePage() {
     });
 
     return () => {
+      clearPendingSnapshotHold();
       socket.removeAllListeners();
       socket.disconnect();
     };
@@ -1641,7 +1866,15 @@ export default function HomePage() {
     pendingFusionSlotRef.current = null;
     pendingFusionSnapshotVersionRef.current = null;
     deferredSnapshotRef.current = null;
+    lastAppliedSnapshotVersionRef.current = 0;
+    pendingVisualAnimationsRef.current = 0;
     fusionAnimatingRef.current = false;
+    drawSyncVersionRef.current = null;
+    turnIntroRunningRef.current = false;
+    turnIntroStartVersionRef.current = null;
+    latestEventVersionRef.current = 0;
+    clearPendingSnapshotHold();
+    animationQueueRef.current = new AnimationQueue();
     if (fusionOverlayRef.current) {
       fusionOverlayRef.current.innerHTML = "";
     }
@@ -2076,8 +2309,12 @@ export default function HomePage() {
     interaction.kind === "fusion_selectMaterials" || interaction.kind === "fusion_chooseResultSlot" || interaction.kind === "position_choose";
   const actionTrayClassName =
     interaction.kind === "fusion_selectMaterials" || interaction.kind === "fusion_chooseResultSlot"
-      ? "left-1/2 top-[22%] -translate-x-1/2 max-[980px]:top-[18%]"
-      : "bottom-[86px] left-1/2 -translate-x-1/2";
+      ? isMobileLayout
+        ? "left-1/2 top-[19%] -translate-x-1/2 max-w-[calc(100vw-20px)]"
+        : "left-1/2 top-[22%] -translate-x-1/2 max-[980px]:top-[18%]"
+      : isMobileLayout
+        ? "left-1/2 bottom-[208px] -translate-x-1/2 max-w-[calc(100vw-20px)]"
+        : "bottom-[86px] left-1/2 -translate-x-1/2";
   const showHintBanner = !isMyTurn || isFlowState(interaction) || Boolean(gameError) || inputLockedByCombat;
   const hintBannerText =
     gameError || (waitingForPrompt ? "Responder combate pendente..." : waitingAttackResolution ? "Aguardando resposta do oponente..." : hint);
@@ -2102,13 +2339,25 @@ export default function HomePage() {
     Boolean(pveResultModal) ||
     endScreenVisible ||
     interaction.kind === "cardMenuOpen";
+  const boardShellClassName = isMobileLayout
+    ? "relative flex-none overflow-x-auto overflow-y-visible pb-2"
+    : "relative min-h-0 flex-1 overflow-visible";
+  const boardRootClassName = isMobileLayout ? "relative z-board mx-auto min-w-[960px]" : "relative z-board h-full";
+  const handWrapClassName = isMobileLayout
+    ? "pointer-events-none relative z-hand mx-auto mt-2 w-full max-w-[980px] overflow-visible px-2"
+    : `pointer-events-none absolute inset-x-0 z-hand mx-auto w-full max-w-[1520px] overflow-visible px-2 transition-all ${
+        prioritizingBoardSlotClick ? "bottom-[-34px] opacity-95" : "bottom-[-26px]"
+      }`;
+  const handRailClassName = isMobileLayout
+    ? "mx-auto h-[196px] w-full overflow-visible"
+    : `mx-auto w-full max-w-[1140px] overflow-visible ${prioritizingBoardSlotClick ? "pointer-events-none h-[172px]" : "h-[184px]"}`;
 
   const positionStateMonster =
     snapshot && interaction.kind === "position_choose" ? snapshot.you.monsterZone[interaction.slotIndex] : null;
 
   return (
     <main
-      className={`fm-screen fm-noise-overlay mx-auto flex h-screen min-h-screen w-full max-w-none flex-col overflow-hidden ${
+      className={`fm-screen fm-noise-overlay mx-auto flex min-h-[100dvh] w-full max-w-none flex-col overflow-x-hidden overflow-y-auto ${
         compactMatchHeader ? "gap-2 p-2" : "gap-3 p-4"
       }`}
     >
@@ -2267,12 +2516,14 @@ export default function HomePage() {
 
       {showMatch && snapshot && (
         <section
-          className={`grid min-h-0 flex-1 gap-3 overflow-visible ${showLogPanel ? "lg:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-1"}`}
+          className={`grid ${isMobileLayout ? "flex-none gap-2 overflow-visible" : "min-h-0 flex-1 gap-3 overflow-visible"} ${
+            showLogPanel ? "lg:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-1"
+          }`}
         >
-          <div className="fm-panel fm-frame relative flex min-h-0 flex-col gap-1 overflow-visible p-2">
-            <div className="relative min-h-0 flex-1 overflow-visible">
-              <LogTicker lines={tickerLines} className="top-[58px]" />
-              <div ref={boardAnimRootRef} className="relative z-board h-full">
+          <div className={`fm-panel fm-frame relative flex flex-col gap-1 overflow-visible p-2 ${isMobileLayout ? "" : "min-h-0"}`}>
+            <div className={boardShellClassName}>
+              <LogTicker lines={tickerLines} className={isMobileLayout ? "top-[106px]" : "top-[58px]"} />
+              <div ref={boardAnimRootRef} className={boardRootClassName}>
                 <BoardStage
                   playerMonsters={playerMonsters}
                   enemyMonsters={enemyMonsters}
@@ -2280,6 +2531,7 @@ export default function HomePage() {
                   enemySpellTraps={enemySpellTraps}
                   registerCardElement={rectRegistry.registerCardElement}
                   registerSlotElement={rectRegistry.registerSlotElement}
+                  registerZoneElement={rectRegistry.registerSlotElement}
                   inputLocked={boardOverlayLocked}
                   zoneCounts={{
                     DECK_YOU: snapshot.you.deckCount,
@@ -2336,7 +2588,11 @@ export default function HomePage() {
                 <div ref={fusionOverlayRef} className="pointer-events-none fixed inset-0 z-[70]" />
               </div>
               <HudLayer>
-                <div className="pointer-events-auto absolute left-2 top-2 z-tooltip w-[min(620px,calc(100%-230px))]">
+                <div
+                  className={`pointer-events-auto absolute z-tooltip ${
+                    isMobileLayout ? "left-1 right-1 top-1 w-auto" : "left-2 top-2 w-[min(620px,calc(100%-230px))]"
+                  }`}
+                >
                   <HintsBar
                     yourTurn={isMyTurn}
                     phase={snapshot.turn.phase}
@@ -2347,7 +2603,11 @@ export default function HomePage() {
                 </div>
 
                 {tutorialActive && tutorialLesson && (
-                  <div className="pointer-events-auto absolute left-2 top-[72px] z-tooltip w-[min(370px,calc(100%-250px))]">
+                  <div
+                    className={`pointer-events-auto absolute z-tooltip ${
+                      isMobileLayout ? "left-1 right-1 top-[78px] w-auto" : "left-2 top-[72px] w-[min(370px,calc(100%-250px))]"
+                    }`}
+                  >
                     <div className="fm-panel rounded-lg border border-amber-300/45 bg-slate-900/90 p-2.5">
                       <div className="mb-1.5 flex items-start justify-between gap-2">
                         <div className="min-w-0">
@@ -2394,7 +2654,7 @@ export default function HomePage() {
                   </div>
                 )}
 
-                <div className="pointer-events-auto absolute right-2 top-2 z-tooltip flex flex-col items-end gap-1.5">
+                <div className={`pointer-events-auto absolute z-tooltip flex flex-col items-end gap-1.5 ${isMobileLayout ? "right-1 top-[78px]" : "right-2 top-2"}`}>
                   <button
                     type="button"
                     onClick={() => setShowLogPanel((current) => !current)}
@@ -2415,14 +2675,14 @@ export default function HomePage() {
                   youLp={snapshot.you.lp}
                   opponentLp={snapshot.opponent.lp}
                   opponentHandCount={snapshot.opponent.handCount}
-                  className="top-11 right-2"
+                  className={isMobileLayout ? "right-1 top-2 min-w-[150px] w-[220px] max-w-[48vw]" : "top-11 right-2"}
                   registerRect={(id, element) => rectRegistry.registerSlotElement(id, element)}
                 />
                 <HintBanner text={hintBannerText} visible={showHintBanner} />
                 <EndTurnButton
                   enabled={isMyTurn}
                   onEndTurn={submitEndTurn}
-                  className="left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+                  className={isMobileLayout ? "left-1/2 top-[49%] -translate-x-1/2 -translate-y-1/2" : "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"}
                 />
 
                 <ActionTray visible={showActionTray} className={actionTrayClassName}>
@@ -2519,15 +2779,10 @@ export default function HomePage() {
 
               <CardPreview card={previewSelection} dimmed={Boolean(targetingMode)} />
 
-              <div
-                className={`pointer-events-none absolute inset-x-0 z-hand mx-auto w-full max-w-[1520px] overflow-visible px-2 transition-all ${
-                  prioritizingBoardSlotClick ? "bottom-[-34px] opacity-95" : "bottom-[-26px]"
-                }`}
-              >
+              <div className={handWrapClassName}>
                 <div
-                  className={`mx-auto w-full max-w-[1140px] overflow-visible ${
-                    prioritizingBoardSlotClick ? "pointer-events-none h-[172px]" : "h-[184px]"
-                  }`}
+                  ref={(element) => rectRegistry.registerSlotElement("zone:hand:player", element)}
+                  className={handRailClassName}
                 >
                   <HandFan
                     cards={handCards}
@@ -2729,7 +2984,7 @@ export default function HomePage() {
           )}
 
           {showLogPanel && (
-            <aside className="fm-panel flex min-h-0 w-full max-w-[320px] flex-col gap-2 overflow-hidden p-3">
+            <aside className={`fm-panel flex min-h-0 w-full flex-col gap-2 overflow-hidden p-3 ${isMobileLayout ? "" : "max-w-[320px]"}`}>
             <h3 className="text-sm font-semibold text-slate-100">Estado rapido</h3>
             <p className="text-xs text-slate-300">Room: {roomState?.roomCode}</p>
             <p className="text-xs text-slate-300">Seu cemiterio: {snapshot.you.graveyard.length}</p>

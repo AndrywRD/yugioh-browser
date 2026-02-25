@@ -55,6 +55,7 @@ interface BoardStageProps {
   inputLocked?: boolean;
   registerCardElement?: (instanceId: string, element: HTMLButtonElement | null) => void;
   registerSlotElement?: (slotId: string, element: HTMLButtonElement | null) => void;
+  registerZoneElement?: (zoneId: string, element: HTMLElement | null) => void;
   onClickSlot: (slotIndex: number, side: BoardSlotSide, zone: BoardSlotZone, anchorRect: AnchorRect) => void;
   onHoverSlot?: (slotIndex: number, side: BoardSlotSide, zone: BoardSlotZone, anchorRect: AnchorRect | null) => void;
   onHoverMonster?: (
@@ -134,6 +135,13 @@ function isGraveZone(zoneId: ZoneId): boolean {
   return zoneId === "GRAVE_OPP" || zoneId === "GRAVE_YOU";
 }
 
+function zoneRectId(zoneId: ZoneId): "zone:deck:player" | "zone:deck:enemy" | "zone:grave:player" | "zone:grave:enemy" {
+  if (zoneId === "DECK_YOU") return "zone:deck:player";
+  if (zoneId === "DECK_OPP") return "zone:deck:enemy";
+  if (zoneId === "GRAVE_YOU") return "zone:grave:player";
+  return "zone:grave:enemy";
+}
+
 export function BoardStage({
   playerMonsters,
   enemyMonsters,
@@ -152,6 +160,7 @@ export function BoardStage({
   inputLocked = false,
   registerCardElement,
   registerSlotElement,
+  registerZoneElement,
   onClickSlot,
   onHoverSlot,
   onHoverMonster
@@ -208,7 +217,7 @@ export function BoardStage({
   };
 
   return (
-    <div className="relative mx-auto aspect-[16/9] h-full max-h-full w-full max-w-[1520px] overflow-hidden rounded-2xl">
+    <div className="relative mx-auto aspect-[16/9] h-auto w-full max-w-[1520px] overflow-hidden rounded-2xl lg:h-full lg:max-h-full">
       <Board />
       <TargetingOverlay mode={targetingMode ?? null} />
 
@@ -235,6 +244,7 @@ export function BoardStage({
             <button
               key={zone.id}
               type="button"
+              ref={(element) => registerZoneElement?.(zoneRectId(zone.id), element)}
               onClick={(event) => handleZoneClick(event, zone.id)}
               className={`${boardInputLocked ? "pointer-events-none" : "pointer-events-auto"} absolute rounded-md border border-amber-300/35 bg-black/25 shadow-[0_8px_14px_rgba(0,0,0,0.35)] transition-all hover:border-amber-200/70 hover:bg-black/35 ${
                 debugSlots ? "ring-1 ring-cyan-300/80" : ""

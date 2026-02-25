@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -720,63 +719,81 @@ export default function LobbyPage() {
   };
 
   return (
-    <main className="fm-screen fm-noise-overlay lobby-readable relative h-screen overflow-y-auto overflow-x-hidden text-slate-100">
-      <div className="mx-auto w-full max-w-[1920px] p-2 sm:p-3 lg:p-4">
-        <section className="relative min-h-[calc(100vh-1rem)] overflow-hidden rounded-[24px] border border-[#d1a95b]/45 shadow-[0_18px_64px_rgba(0,0,0,0.62)] sm:min-h-[calc(100vh-1.5rem)] lg:min-h-[calc(100vh-2rem)]">
-          <Image src="/ui/ui-lobby.png" alt="Lobby background" fill priority className="pointer-events-none select-none object-cover opacity-[0.82]" />
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(115%_85%_at_24%_30%,rgba(106,154,255,0.24),transparent_56%),radial-gradient(150%_120%_at_70%_95%,rgba(0,0,0,0.6),transparent_68%),linear-gradient(180deg,rgba(4,9,22,0.28),rgba(3,7,18,0.62))]" />
+    <main className="fm-screen fm-noise-overlay fm-scroll lobby-readable lobbyRoot relative min-h-[100dvh] overflow-y-auto overflow-x-hidden text-slate-100">
+      <div className="lobbyBg" aria-hidden="true">
+        <div className="bgScene" />
+        <div className="bgVignette" />
+        <div className="bgStars" />
+        <div className="bgNoise" />
+      </div>
 
-          <div className="relative z-[1] mx-auto w-full max-w-[1760px] space-y-4 px-4 py-4 sm:px-5 sm:py-5 lg:space-y-5 lg:px-7 lg:py-6">
-            <LobbyHeader
-              player={player}
-              loading={loading}
-              hasCampaignProgress={hasCampaignProgress}
-              onPrimaryAction={handlePrimaryAction}
-              onSecondaryAction={handleSecondaryAction}
-              onAuthAction={() => setSection("PROFILE")}
-            />
+      <div className="lobbyUi mx-auto w-full max-w-[1920px] p-2 sm:p-3 lg:p-4">
+        <section className="lobbyFrameA mx-auto w-full max-w-[1760px]">
+          <div className="space-y-4 px-4 py-4 sm:px-5 sm:py-5 lg:space-y-5 lg:px-7 lg:py-6">
+            <section className="lobbySurface lobbySurface--hero">
+              <LobbyHeader
+                player={player}
+                loading={loading}
+                hasCampaignProgress={hasCampaignProgress}
+                onPrimaryAction={handlePrimaryAction}
+                onSecondaryAction={handleSecondaryAction}
+                onAuthAction={() => setSection("PROFILE")}
+              />
+            </section>
 
             <LobbyTicker messages={tickerMessages} onRemove={removeTicker} />
 
-            {error ? <section className="rounded-xl border border-rose-500/70 bg-rose-900/40 px-3 py-2 text-sm text-rose-100">{error}</section> : null}
+            {error ? (
+              <section className="rounded-xl border border-rose-500/70 bg-rose-900/40 px-3 py-2 text-sm text-rose-100">
+                {error}
+              </section>
+            ) : null}
 
-            <LobbyTabs active={section} onChange={setSection} disabled={false} />
+            <section className="lobbySurface lobbySurface--tabs">
+              <LobbyTabs active={section} onChange={setSection} disabled={false} />
+            </section>
 
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1.85fr)_minmax(320px,1fr)]">
-              <section className="min-w-0 space-y-3">
+              <section className="lobbySurface min-w-0">
                 <TabsAnimatedPanel active={section}>{renderActiveSection()}</TabsAnimatedPanel>
               </section>
 
               <aside className="space-y-3">
                 {section !== "PROFILE" && (
-                  <ProfileDeckCard
+                  <section className="lobbySurface lobbySurface--sidebar">
+                    <ProfileDeckCard
+                      loading={loading}
+                      player={player}
+                      decks={decks}
+                      activeDeck={activeDeck}
+                      activeDeckTotal={activeDeckTotal}
+                      activeDeckValid={activeDeckValid}
+                      onSetActiveDeck={(deckId) => void handleSetActiveDeck(deckId)}
+                      onLogout={handleLogout}
+                    />
+                  </section>
+                )}
+                <section className="lobbySurface lobbySurface--sidebar">
+                  <DailyMissionsCard
+                    loading={loading}
+                    playerLogged={Boolean(player)}
+                    missions={dailyMissions}
+                    claimingMissionKey={claimingMissionKey}
+                    onClaim={(missionKey) => void handleClaimDailyMission(missionKey)}
+                  />
+                </section>
+                <section className="lobbySurface lobbySurface--sidebar">
+                  <ProgressCard
                     loading={loading}
                     player={player}
-                    decks={decks}
-                    activeDeck={activeDeck}
-                    activeDeckTotal={activeDeckTotal}
-                    activeDeckValid={activeDeckValid}
-                    onSetActiveDeck={(deckId) => void handleSetActiveDeck(deckId)}
-                    onLogout={handleLogout}
+                    npcs={npcs}
+                    fusionCount={fusionCount}
+                    levelProgress={levelProgress}
+                    achievementsUnlocked={achievements.length}
+                    availableAchievements={availableAchievements}
+                    dailyMissionCompleted={dailyMissions.filter((mission) => mission.claimed).length}
                   />
-                )}
-                <DailyMissionsCard
-                  loading={loading}
-                  playerLogged={Boolean(player)}
-                  missions={dailyMissions}
-                  claimingMissionKey={claimingMissionKey}
-                  onClaim={(missionKey) => void handleClaimDailyMission(missionKey)}
-                />
-                <ProgressCard
-                  loading={loading}
-                  player={player}
-                  npcs={npcs}
-                  fusionCount={fusionCount}
-                  levelProgress={levelProgress}
-                  achievementsUnlocked={achievements.length}
-                  availableAchievements={availableAchievements}
-                  dailyMissionCompleted={dailyMissions.filter((mission) => mission.claimed).length}
-                />
+                </section>
               </aside>
             </div>
           </div>

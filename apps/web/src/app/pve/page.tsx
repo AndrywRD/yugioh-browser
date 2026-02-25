@@ -616,8 +616,9 @@ export default function PvePage() {
             <p className="mt-1 text-xs text-slate-400">Ajuste busca, tier ou toggle de alvos para continuar.</p>
           </section>
         ) : (
-          <section className={`grid gap-2 ${compactMode ? "sm:grid-cols-2 xl:grid-cols-3" : "xl:grid-cols-2"}`}>
-            {filteredSortedNpcs.map((npc) => {
+          <div className="fm-scroll max-h-[62dvh] overflow-y-auto pr-1">
+            <section className={`grid gap-2 ${compactMode ? "sm:grid-cols-2 xl:grid-cols-3" : "xl:grid-cols-2"}`}>
+              {filteredSortedNpcs.map((npc) => {
               const tracker = dropProgressByNpcId[npc.id];
               const status = statusView(npc);
               const drops = npcDropsByNpcId[npc.id] ?? [];
@@ -749,8 +750,9 @@ export default function PvePage() {
                   </div>
                 </article>
               );
-            })}
-          </section>
+              })}
+            </section>
+          </div>
         )}
       </div>
 

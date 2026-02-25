@@ -19,7 +19,7 @@ export function CardPreview({ card, dimmed = false }: CardPreviewProps) {
 
   return (
     <div
-      className={`pointer-events-none absolute bottom-[86px] right-4 z-preview w-[300px] max-w-[30vw] min-w-[220px] transition-opacity max-[1100px]:w-[250px] max-[1100px]:max-w-[36vw] max-[760px]:w-[220px] max-[760px]:max-w-[45vw] ${
+      className={`pointer-events-none absolute bottom-[86px] right-4 z-preview w-[300px] max-w-[30vw] min-w-[220px] transition-opacity max-[1100px]:w-[250px] max-[1100px]:max-w-[36vw] max-[760px]:w-[220px] max-[760px]:max-w-[45vw] max-[1023px]:hidden ${
         dimmed ? "opacity-55" : "opacity-95"
       }`}
     >

@@ -40,7 +40,7 @@ interface LpHudImageProps {
   opponentLp: number;
   opponentHandCount?: number;
   className?: string;
-  registerRect?: (id: "hud:lp:you" | "hud:lp:opp", element: HTMLDivElement | null) => void;
+  registerRect?: (id: "hud:lp:you" | "hud:lp:opp" | "zone:hand:enemy", element: HTMLDivElement | null) => void;
 }
 
 function clampLp(value: number): number {
@@ -114,6 +114,7 @@ export function LpHudImage({ youLp, opponentLp, opponentHandCount, className, re
 
         {typeof opponentHandCount === "number" && (
           <div
+            ref={(element) => registerRect?.("zone:hand:enemy", element)}
             className="absolute"
             style={{ left: `${HAND_BOX.leftPct}%`, top: `${HAND_BOX.topPct}%`, width: `${HAND_BOX.wPct}%`, height: `${HAND_BOX.hPct}%` }}
           >
