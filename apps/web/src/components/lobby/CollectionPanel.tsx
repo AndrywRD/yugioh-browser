@@ -47,13 +47,16 @@ export function CollectionPanel({ playerLogged, loading, activeDeck, activeDeckT
         )}
       </GameCard>
 
-      <GameCard title="Acoes de Colecao" subtitle="Atalhos para gestao de cartas e decks">
-        <div className="grid gap-2 sm:grid-cols-3">
+      <GameCard title="Acoes de Colecao" subtitle="Atalhos rapidos">
+        <div className="grid gap-2 sm:grid-cols-4">
           <Link href="/deck-builder" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
             Deck Builder
           </Link>
           <Link href="/fusion-log" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
             Fusion Log
+          </Link>
+          <Link href="/shop" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
+            Card Trader
           </Link>
           <Link href="/profile" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
             Perfil

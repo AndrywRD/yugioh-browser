@@ -20,6 +20,10 @@ import { CardMenu, type CardMenuItem } from "../../components/ui/CardMenu";
 import { ContextMenuPortal } from "../../components/ui/ContextMenuPortal";
 import { HintsBar } from "../../components/ui/HintsBar";
 import type { AnchorRect } from "../../lib/anchors";
+import { AnimationQueue } from "../../lib/animation/animationQueue";
+import { duelFx } from "../../lib/animation/duelFx";
+import { playFusionAnimation, type FusionAnimationRequest } from "../../lib/animation/fusionAnimator";
+import { buildSlotRectId, useRectRegistry } from "../../lib/animation/rectRegistry";
 import {
   buildHint,
   canChangeMonsterPosition,
@@ -107,10 +111,114 @@ interface MatchPromptState {
   };
 }
 
+interface SnapshotPacket {
+  version: number;
+  state: GameStateForClient;
+}
+
+interface FusionEventPayload {
+  materials?: string[];
+  resultTemplateId?: string;
+  resultName?: string;
+  resultSlot?: number;
+}
+
+interface AttackDeclaredPayload {
+  attackerSlot?: number;
+  target?: "DIRECT" | { slot?: number };
+}
+
+interface BattleResolvedPayload {
+  attackerSlot?: number;
+  defenderSlot?: number;
+  mode?: "DIRECT" | "EFFECT_DESTROY";
+  damage?: number;
+  destroyed?: Array<{ playerId: string; slot: number }>;
+}
+
+interface SpellTrapActivatedPayload {
+  source?: "HAND" | "SET";
+  slot?: number;
+  effectKey?: string;
+  targetMonsterSlot?: number;
+  targetPlayerId?: string;
+}
+
 interface TutorialObjectiveState {
   key: string;
   label: string;
   done: boolean;
+}
+
+interface InstanceCardLite {
+  instanceId: string;
+  name: string;
+  imagePath?: string;
+}
+
+function findCardByInstanceId(snapshot: GameStateForClient, instanceId: string): InstanceCardLite | null {
+  const ownMonsters = snapshot.you.monsterZone.filter((card): card is NonNullable<typeof card> => Boolean(card));
+  const ownSpells = snapshot.you.spellTrapZone.filter((card): card is NonNullable<typeof card> => Boolean(card));
+  const enemyMonsters = snapshot.opponent.monsterZone.filter((card): card is NonNullable<typeof card> => Boolean(card));
+  const enemySpells = snapshot.opponent.spellTrapZone.filter((card): card is NonNullable<typeof card> => Boolean(card));
+  const pool: InstanceCardLite[] = [...(snapshot.you.hand ?? []), ...ownMonsters, ...ownSpells, ...enemyMonsters, ...enemySpells];
+  return pool.find((card) => card.instanceId === instanceId) ?? null;
+}
+
+function buildFusionAnimationRequestFromEvent(
+  snapshot: GameStateForClient,
+  event: GameEvent,
+  localPlayerId: string | null
+): FusionAnimationRequest | null {
+  const payload = (event.payload ?? {}) as FusionEventPayload;
+  const materialIds = Array.isArray(payload.materials) ? payload.materials.map((id) => String(id)) : [];
+  const resultSlot = typeof payload.resultSlot === "number" ? payload.resultSlot : null;
+  if (!materialIds.length || resultSlot === null || !event.playerId) return null;
+
+  const materials = materialIds.map((instanceId) => {
+    const card = findCardByInstanceId(snapshot, instanceId);
+    return {
+      instanceId,
+      name: card?.name ?? "Material oculto",
+      imagePath: card?.imagePath
+    };
+  });
+
+  const resultTemplateId = typeof payload.resultTemplateId === "string" ? payload.resultTemplateId : "";
+  const resultTemplate = resultTemplateId ? CARD_INDEX[resultTemplateId] : null;
+  const ownerSide = event.playerId === localPlayerId ? "PLAYER" : "ENEMY";
+  return {
+    materials,
+    result: {
+      templateId: resultTemplateId || "unknown_fusion_result",
+      name: typeof payload.resultName === "string" ? payload.resultName : resultTemplate?.name ?? "Resultado",
+      imagePath: resultTemplate?.imagePath
+    },
+    targetSlotId: buildSlotRectId(ownerSide, "MONSTER", resultSlot)
+  };
+}
+
+function resolveBoardSide(eventPlayerId: string | undefined, localPlayerId: string | null): BoardSide | null {
+  if (!eventPlayerId || !localPlayerId) return null;
+  return eventPlayerId === localPlayerId ? "PLAYER" : "ENEMY";
+}
+
+function resolveLpRectIdForSide(side: "YOU" | "OPP"): "hud:lp:you" | "hud:lp:opp" {
+  return side === "YOU" ? "hud:lp:you" : "hud:lp:opp";
+}
+
+function resolveSideToHud(side: BoardSide): "YOU" | "OPP" {
+  return side === "PLAYER" ? "YOU" : "OPP";
+}
+
+function resolveDirectAttackCenterRect(attackerSide: BoardSide, boardRoot: HTMLElement | null): DOMRect | null {
+  if (!boardRoot) return null;
+  const boardRect = boardRoot.getBoundingClientRect();
+  const centerX = boardRect.left + boardRect.width * 0.5;
+  const centerY = boardRect.top + boardRect.height * (attackerSide === "PLAYER" ? 0.31 : 0.69);
+  const width = Math.max(120, boardRect.width * 0.1);
+  const height = Math.max(150, boardRect.height * 0.18);
+  return new DOMRect(centerX - width / 2, centerY - height / 2, width, height);
 }
 
 function uniqueMarkers(markers: SlotMarker[]): SlotMarker[] {
@@ -312,6 +420,7 @@ export default function HomePage() {
   const [usernameFromQuery, setUsernameFromQuery] = useState("");
   const [autoCreateFromQuery, setAutoCreateFromQuery] = useState(false);
   const [autoSoloFromQuery, setAutoSoloFromQuery] = useState(false);
+  const [matchModeFromQuery, setMatchModeFromQuery] = useState<"PVP" | "PVE">("PVP");
   const [tutorialLessonId, setTutorialLessonId] = useState<TutorialLessonId | null>(null);
   const [tutorialObjectives, setTutorialObjectives] = useState<TutorialObjectiveState[]>([]);
   const [tutorialCompleting, setTutorialCompleting] = useState(false);
@@ -321,6 +430,33 @@ export default function HomePage() {
   const endSfxPlayedRef = useRef<DuelOutcome | null>(null);
   const autoJoinAttemptedRef = useRef(false);
   const sfx = useMemo(() => new SfxManager(0.32), []);
+  const rectRegistry = useRectRegistry();
+  const fusionOverlayRef = useRef<HTMLDivElement | null>(null);
+  const boardAnimRootRef = useRef<HTMLDivElement | null>(null);
+  const animationQueueRef = useRef(new AnimationQueue());
+  const snapshotRef = useRef<GameStateForClient | null>(null);
+  const fusionAnimatingRef = useRef(false);
+  const pendingFusionSnapshotVersionRef = useRef<number | null>(null);
+  const deferredSnapshotRef = useRef<SnapshotPacket | null>(null);
+
+  const applySnapshotPacket = useCallback((packet: SnapshotPacket) => {
+    setSnapshot(packet.state);
+    snapshotRef.current = packet.state;
+    const pending = packet.state.pendingPrompt;
+    if (!pending) {
+      setMatchPrompt(null);
+    } else {
+      setMatchPrompt({
+        promptType: pending.type,
+        data: {
+          attackerSlot: pending.attackerSlot,
+          target: pending.target,
+          availableTrapSlots: pending.availableTrapSlots
+        }
+      });
+    }
+    setGameError("");
+  }, []);
 
   const meInRoom = useMemo(
     () => roomState?.players.find((player) => player.playerId === playerId) ?? null,
@@ -730,6 +866,8 @@ export default function HomePage() {
 
   const hint = snapshot ? buildHint(interaction, snapshot) : "";
   const showMatch = Boolean(snapshot) && (roomState?.status === "RUNNING" || roomState?.status === "FINISHED");
+  const autoEntryRequested = Boolean(roomCodeFromQuery) || autoCreateFromQuery || autoSoloFromQuery;
+  const waitingMatchBootstrap = autoEntryRequested && !showMatch && !gameError && !roomError;
   const inLobby = roomState && roomState.status === "LOBBY";
   const duelOutcome = useMemo(() => resolveDuelOutcome(snapshot, playerId), [snapshot, playerId]);
   const tutorialLesson = useMemo(() => getTutorialLesson(tutorialLessonId), [tutorialLessonId]);
@@ -785,10 +923,12 @@ export default function HomePage() {
     setUsernameFromQuery(params.get("username")?.trim() ?? "");
     const autoCreateValue = params.get("autoCreate")?.trim().toLowerCase() ?? "";
     const autoSoloValue = params.get("autoSolo")?.trim().toLowerCase() ?? "";
+    const modeValue = params.get("mode")?.trim().toUpperCase() ?? "";
     const tutorialValue = params.get("tutorial")?.trim().toLowerCase() ?? "";
     const lessonId = parseTutorialLessonId(params.get("lesson")?.trim() ?? null);
     setAutoCreateFromQuery(autoCreateValue === "1" || autoCreateValue === "true" || autoCreateValue === "yes");
     setAutoSoloFromQuery(autoSoloValue === "1" || autoSoloValue === "true" || autoSoloValue === "yes");
+    setMatchModeFromQuery(modeValue === "PVE" ? "PVE" : "PVP");
     setTutorialLessonId(tutorialValue === "1" || tutorialValue === "true" || tutorialValue === "yes" ? lessonId : null);
   }, []);
 
@@ -910,22 +1050,13 @@ export default function HomePage() {
       setRoomError(payload.message);
       setRematchBusy(false);
     });
-    socket.on("game:snapshot", (payload: { state: GameStateForClient }) => {
-      setSnapshot(payload.state);
-      const pending = payload.state.pendingPrompt;
-      if (!pending) {
-        setMatchPrompt(null);
-      } else {
-        setMatchPrompt({
-          promptType: pending.type,
-          data: {
-            attackerSlot: pending.attackerSlot,
-            target: pending.target,
-            availableTrapSlots: pending.availableTrapSlots
-          }
-        });
+    socket.on("game:snapshot", (payload: SnapshotPacket) => {
+      const pendingVersion = pendingFusionSnapshotVersionRef.current;
+      if (fusionAnimatingRef.current && pendingVersion !== null && payload.version >= pendingVersion) {
+        deferredSnapshotRef.current = payload;
+        return;
       }
-      setGameError("");
+      applySnapshotPacket(payload);
     });
     socket.on("game:prompt", (payload: GamePromptPayload) => {
       setMatchPrompt({
@@ -933,7 +1064,35 @@ export default function HomePage() {
         data: payload.data ?? {}
       });
     });
-    socket.on("game:events", (payload: { events: GameEvent[] }) => {
+    socket.on("game:events", (payload: { version: number; events: GameEvent[] }) => {
+      const fusionEvent = payload.events.find((event) => event.type === "FUSION_RESOLVED" || event.type === "FUSION_FAILED");
+      let fusionAnimationScheduled = false;
+      if (fusionEvent && snapshotRef.current) {
+        const animationRequest = buildFusionAnimationRequestFromEvent(snapshotRef.current, fusionEvent, playerId);
+        if (animationRequest) {
+          fusionAnimationScheduled = true;
+          pendingFusionSnapshotVersionRef.current = payload.version;
+          fusionAnimatingRef.current = true;
+          void animationQueueRef.current.enqueue(async () => {
+            try {
+              await playFusionAnimation(fusionOverlayRef.current, rectRegistry, animationRequest, {
+                onImpact: () => sfx.play("fusion"),
+                shakeTarget: boardAnimRootRef.current
+              });
+            } finally {
+              fusionAnimatingRef.current = false;
+              const pendingVersion = pendingFusionSnapshotVersionRef.current;
+              const deferred = deferredSnapshotRef.current;
+              if (pendingVersion !== null && deferred && deferred.version >= pendingVersion) {
+                applySnapshotPacket(deferred);
+                deferredSnapshotRef.current = null;
+              }
+              pendingFusionSnapshotVersionRef.current = null;
+            }
+          });
+        }
+      }
+
       const translated = payload.events.map((event) => eventToText(event, playerId));
       setLogs((prev) => [...translated.map((line) => withTimestamp(line)), ...prev].slice(0, 100));
       setTickerLines((prev) => [...translated, ...prev].slice(0, 8));
@@ -985,6 +1144,38 @@ export default function HomePage() {
           const slot = (event.payload as { slot: number }).slot;
           const side: BoardSide = event.playerId === playerId ? "PLAYER" : "ENEMY";
           setSlotFx((current) => upsertSlotFx(current, { side, zone: "MONSTER", slotIndex: slot, effect: "summon" }));
+
+          const summonPayload = event.payload as { slot: number; instanceId?: string };
+          const slotRectId = buildSlotRectId(side, "MONSTER", slot);
+          void animationQueueRef.current.enqueue(async () => {
+            await new Promise((resolve) => window.setTimeout(resolve, 90));
+            const slotRect = rectRegistry.getSlotRect(slotRectId);
+            if (!slotRect) return;
+
+            const fromRect =
+              side === "PLAYER" && typeof summonPayload.instanceId === "string"
+                ? rectRegistry.getCardRect(summonPayload.instanceId)
+                : null;
+
+            let imagePath =
+              typeof summonPayload.instanceId === "string" && snapshotRef.current
+                ? findCardByInstanceId(snapshotRef.current, summonPayload.instanceId)?.imagePath
+                : undefined;
+
+            if (!imagePath) {
+              const latestSnapshot = snapshotRef.current;
+              if (latestSnapshot) {
+                imagePath = (side === "PLAYER" ? latestSnapshot.you.monsterZone[slot] : latestSnapshot.opponent.monsterZone[slot])?.imagePath;
+              }
+            }
+
+            await duelFx.summonToField(fusionOverlayRef.current, {
+              slotRect,
+              fromRect,
+              imagePath
+            });
+          });
+
           window.setTimeout(() => {
             setSlotFx((current) =>
               current.filter((item) => !(item.side === side && item.zone === "MONSTER" && item.slotIndex === slot && item.effect === "summon"))
@@ -1039,26 +1230,65 @@ export default function HomePage() {
           }
 
           pendingFusionSlotRef.current = null;
-          sfx.play("fusion");
+          if (!fusionAnimationScheduled) {
+            sfx.play("fusion");
+          }
           continue;
         }
 
         if (event.type === "MONSTER_REVEALED") {
-          const revealPayload = event.payload as { slot?: number; ownerPlayerId?: string } | undefined;
+          const revealPayload = event.payload as { slot?: number; ownerPlayerId?: string; templateId?: string } | undefined;
           if (typeof revealPayload?.slot === "number" && revealPayload.ownerPlayerId && playerId) {
             const side: BoardSide = revealPayload.ownerPlayerId === playerId ? "PLAYER" : "ENEMY";
             setHitEffectSlot(marker(side, "MONSTER", revealPayload.slot));
             window.setTimeout(() => setHitEffectSlot(null), 220);
+
+            const rect = rectRegistry.getSlotRect(buildSlotRectId(side, "MONSTER", revealPayload.slot));
+            if (rect) {
+              const frontImagePath =
+                typeof revealPayload.templateId === "string" ? CARD_INDEX[revealPayload.templateId]?.imagePath : undefined;
+              void animationQueueRef.current.enqueue(async () => {
+                await duelFx.flipReveal(fusionOverlayRef.current, {
+                  cardRect: rect,
+                  frontImagePath
+                });
+              });
+            }
           }
           continue;
         }
 
         if (event.type === "ATTACK_DECLARED") {
-          const declared = event.payload as { attackerSlot?: number; target?: "DIRECT" | { slot?: number } } | undefined;
+          const declared = event.payload as AttackDeclaredPayload | undefined;
           if (typeof declared?.attackerSlot === "number" && event.playerId && playerId) {
             const side: BoardSide = event.playerId === playerId ? "PLAYER" : "ENEMY";
             setAttackEffectSlot(marker(side, "MONSTER", declared.attackerSlot));
             window.setTimeout(() => setAttackEffectSlot(null), 280);
+
+            const attackerRect = rectRegistry.getSlotRect(buildSlotRectId(side, "MONSTER", declared.attackerSlot));
+            let targetRect: DOMRect | null = null;
+            if (declared.target === "DIRECT") {
+              targetRect =
+                resolveDirectAttackCenterRect(side, boardAnimRootRef.current) ??
+                rectRegistry.getSlotRect(side === "PLAYER" ? "hud:lp:opp" : "hud:lp:you");
+            } else if (declared.target && typeof declared.target.slot === "number") {
+              const targetSide: BoardSide = side === "PLAYER" ? "ENEMY" : "PLAYER";
+              targetRect = rectRegistry.getSlotRect(buildSlotRectId(targetSide, "MONSTER", declared.target.slot));
+            }
+
+            if (attackerRect && targetRect) {
+              const attackerImagePath =
+                side === "PLAYER"
+                  ? snapshotRef.current?.you.monsterZone[declared.attackerSlot]?.imagePath
+                  : snapshotRef.current?.opponent.monsterZone[declared.attackerSlot]?.imagePath;
+              void animationQueueRef.current.enqueue(async () => {
+                await duelFx.attackDash(fusionOverlayRef.current, {
+                  attackerRect,
+                  targetRect,
+                  attackerImagePath
+                });
+              });
+            }
           }
           if (declared?.target === "DIRECT") {
             sfx.play("attack_direct");
@@ -1068,9 +1298,7 @@ export default function HomePage() {
 
         if (event.type === "BATTLE_RESOLVED") {
           setWaitingAttackResolution(false);
-          const battle = event.payload as
-            | { attackerSlot?: number; defenderSlot?: number; mode?: "DIRECT"; damage?: number; destroyed?: Array<{ playerId: string; slot: number }> }
-            | undefined;
+          const battle = event.payload as BattleResolvedPayload | undefined;
 
           if (typeof battle?.attackerSlot === "number" && event.playerId && playerId) {
             const side: BoardSide = event.playerId === playerId ? "PLAYER" : "ENEMY";
@@ -1096,6 +1324,26 @@ export default function HomePage() {
             }
           }
 
+          let impactRect: DOMRect | null = null;
+          if (battle?.mode === "DIRECT" && event.playerId && playerId) {
+            const attackerSide: BoardSide = event.playerId === playerId ? "PLAYER" : "ENEMY";
+            impactRect =
+              resolveDirectAttackCenterRect(attackerSide, boardAnimRootRef.current) ??
+              rectRegistry.getSlotRect(attackerSide === "PLAYER" ? "hud:lp:opp" : "hud:lp:you");
+          } else if (typeof battle?.defenderSlot === "number" && event.playerId && playerId) {
+            const defenderSide: BoardSide = event.playerId === playerId ? "ENEMY" : "PLAYER";
+            impactRect = rectRegistry.getSlotRect(buildSlotRectId(defenderSide, "MONSTER", battle.defenderSlot));
+          }
+          if (impactRect) {
+            void animationQueueRef.current.enqueue(async () => {
+              await duelFx.impactFrames(fusionOverlayRef.current, {
+                focusRect: impactRect,
+                strength: battle?.mode === "DIRECT" ? 2 : 1,
+                boardRoot: boardAnimRootRef.current
+              });
+            });
+          }
+
           sfx.play(battle?.mode === "DIRECT" ? "attack_direct" : "attack_hit");
           continue;
         }
@@ -1106,16 +1354,63 @@ export default function HomePage() {
           if (!delta) continue;
 
           const side: "YOU" | "OPP" = event.playerId && event.playerId === playerId ? "YOU" : "OPP";
-          const item: FloatingDamage = {
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            value: Math.abs(delta),
-            type: delta < 0 ? "damage" : "heal",
-            side
-          };
-          setFloatingDamages((current) => [...current, item].slice(-8));
-          window.setTimeout(() => {
-            setFloatingDamages((current) => current.filter((entry) => entry.id !== item.id));
-          }, 680);
+          const floaterRect = rectRegistry.getSlotRect(resolveLpRectIdForSide(side));
+          if (floaterRect) {
+            duelFx.damageFloater(fusionOverlayRef.current, {
+              rect: floaterRect,
+              amount: delta,
+              type: delta < 0 ? "damage" : "heal"
+            });
+          } else {
+            const item: FloatingDamage = {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              value: Math.abs(delta),
+              type: delta < 0 ? "damage" : "heal",
+              side
+            };
+            setFloatingDamages((current) => [...current, item].slice(-8));
+            window.setTimeout(() => {
+              setFloatingDamages((current) => current.filter((entry) => entry.id !== item.id));
+            }, 680);
+          }
+          continue;
+        }
+
+        if (event.type === "SPELL_ACTIVATED" || event.type === "TRAP_ACTIVATED") {
+          const activated = event.payload as SpellTrapActivatedPayload | undefined;
+          const casterSide = resolveBoardSide(event.playerId, playerId);
+          if (!casterSide) continue;
+
+          const casterHud = resolveSideToHud(casterSide);
+          const enemyHud = casterHud === "YOU" ? "OPP" : "YOU";
+
+          let fromRect: DOMRect | null = null;
+          if (typeof activated?.slot === "number") {
+            fromRect = rectRegistry.getSlotRect(buildSlotRectId(casterSide, "SPELL_TRAP", activated.slot));
+          }
+          if (!fromRect) {
+            fromRect = rectRegistry.getSlotRect(resolveLpRectIdForSide(casterHud));
+          }
+
+          let toRect: DOMRect | null = null;
+          if (typeof activated?.targetMonsterSlot === "number") {
+            toRect = rectRegistry.getSlotRect(buildSlotRectId(casterSide, "MONSTER", activated.targetMonsterSlot));
+          } else if (typeof activated?.effectKey === "string") {
+            if (activated.effectKey.startsWith("DAMAGE_")) {
+              toRect = rectRegistry.getSlotRect(resolveLpRectIdForSide(enemyHud));
+            } else if (activated.effectKey.startsWith("HEAL_")) {
+              toRect = rectRegistry.getSlotRect(resolveLpRectIdForSide(casterHud));
+            }
+          }
+
+          if (fromRect && toRect) {
+            void animationQueueRef.current.enqueue(async () => {
+              await duelFx.linkBeam(fusionOverlayRef.current, {
+                fromRect,
+                toRect
+              });
+            });
+          }
           continue;
         }
 
@@ -1327,6 +1622,7 @@ export default function HomePage() {
     socket.emit("room:leave", {});
     setRoomState(null);
     setSnapshot(null);
+    snapshotRef.current = null;
     setInteraction(idleInteraction());
     setSelectedCard(null);
     setPreviewCard(null);
@@ -1343,6 +1639,12 @@ export default function HomePage() {
     setRematchBusy(false);
     endSfxPlayedRef.current = null;
     pendingFusionSlotRef.current = null;
+    pendingFusionSnapshotVersionRef.current = null;
+    deferredSnapshotRef.current = null;
+    fusionAnimatingRef.current = false;
+    if (fusionOverlayRef.current) {
+      fusionOverlayRef.current.innerHTML = "";
+    }
     setMatchPrompt(null);
     setWaitingAttackResolution(false);
     setTutorialCompleting(false);
@@ -1364,6 +1666,13 @@ export default function HomePage() {
       leaveRoom();
     }
     router.push("/");
+  };
+
+  const returnToCampaign = () => {
+    if (roomState) {
+      leaveRoom();
+    }
+    router.push("/pve");
   };
 
   const exitTutorial = () => {
@@ -1786,6 +2095,13 @@ export default function HomePage() {
     interaction.kind === "equipFromHand_selectTarget" ||
     interaction.kind === "equipSet_selectTarget";
   const compactMatchHeader = showMatch;
+  const endScreenVisible = Boolean(endState) && !endScreenDismissed && !pveResultModal && matchModeFromQuery !== "PVE";
+  const boardOverlayLocked =
+    showFusionLogModal ||
+    Boolean(activePrompt) ||
+    Boolean(pveResultModal) ||
+    endScreenVisible ||
+    interaction.kind === "cardMenuOpen";
 
   const positionStateMonster =
     snapshot && interaction.kind === "position_choose" ? snapshot.you.monsterZone[interaction.slotIndex] : null;
@@ -1814,7 +2130,19 @@ export default function HomePage() {
         </div>
       </header>
 
-      {!roomState && (
+      {waitingMatchBootstrap && (
+        <section className="fm-panel grid min-h-[160px] place-items-center p-4">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-amber-300/85 border-t-transparent" />
+            <div>
+              <p className="fm-title text-sm font-semibold">Preparando duelo</p>
+              <p className="text-xs text-slate-300">Conectando sala e carregando estado da partida...</p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {!roomState && !waitingMatchBootstrap && (
         <section className="fm-panel grid gap-3 p-4">
           <h2 className="fm-title text-lg font-semibold">Home</h2>
           <input
@@ -1874,7 +2202,7 @@ export default function HomePage() {
         </section>
       )}
 
-      {inLobby && roomState && (
+      {inLobby && roomState && !waitingMatchBootstrap && (
         <section className="fm-panel grid gap-3 p-4">
           <h2 className="fm-title text-lg font-semibold">Lobby - Sala {roomState.roomCode}</h2>
           <div className="grid gap-2 md:grid-cols-[1fr_auto]">
@@ -1944,12 +2272,15 @@ export default function HomePage() {
           <div className="fm-panel fm-frame relative flex min-h-0 flex-col gap-1 overflow-visible p-2">
             <div className="relative min-h-0 flex-1 overflow-visible">
               <LogTicker lines={tickerLines} className="top-[58px]" />
-              <div className="relative z-board h-full">
+              <div ref={boardAnimRootRef} className="relative z-board h-full">
                 <BoardStage
                   playerMonsters={playerMonsters}
                   enemyMonsters={enemyMonsters}
                   playerSpellTraps={playerSpellTraps}
                   enemySpellTraps={enemySpellTraps}
+                  registerCardElement={rectRegistry.registerCardElement}
+                  registerSlotElement={rectRegistry.registerSlotElement}
+                  inputLocked={boardOverlayLocked}
                   zoneCounts={{
                     DECK_YOU: snapshot.you.deckCount,
                     GRAVE_YOU: snapshot.you.graveyard.length,
@@ -2002,6 +2333,7 @@ export default function HomePage() {
                   }}
                   onClickSlot={onBoardSlotClick}
                 />
+                <div ref={fusionOverlayRef} className="pointer-events-none fixed inset-0 z-[70]" />
               </div>
               <HudLayer>
                 <div className="pointer-events-auto absolute left-2 top-2 z-tooltip w-[min(620px,calc(100%-230px))]">
@@ -2079,12 +2411,18 @@ export default function HomePage() {
                   </button>
                 </div>
 
-                <LpHudImage youLp={snapshot.you.lp} opponentLp={snapshot.opponent.lp} opponentHandCount={snapshot.opponent.handCount} className="top-11 right-2" />
+                <LpHudImage
+                  youLp={snapshot.you.lp}
+                  opponentLp={snapshot.opponent.lp}
+                  opponentHandCount={snapshot.opponent.handCount}
+                  className="top-11 right-2"
+                  registerRect={(id, element) => rectRegistry.registerSlotElement(id, element)}
+                />
                 <HintBanner text={hintBannerText} visible={showHintBanner} />
                 <EndTurnButton
                   enabled={isMyTurn}
                   onEndTurn={submitEndTurn}
-                  className="left-[82%] top-[67%] -translate-x-1/2 -translate-y-1/2 max-[980px]:left-[79%] max-[980px]:top-[64%]"
+                  className="left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
                 />
 
                 <ActionTray visible={showActionTray} className={actionTrayClassName}>
@@ -2196,6 +2534,7 @@ export default function HomePage() {
                     selectedIds={selectedHandIds}
                     highlightedIds={highlightedHandIds}
                     badgeById={handBadgeById}
+                    registerCardElement={rectRegistry.registerCardElement}
                     onCardClick={onHandCardClick}
                     onCardHover={(card) => {
                       if (!card) {
@@ -2229,12 +2568,22 @@ export default function HomePage() {
 
             {interaction.kind === "cardMenuOpen" && menuItems.length > 0 && menuAnchorRect && (
               <ContextMenuPortal>
+                <button
+                  type="button"
+                  aria-label="Fechar menu"
+                  className="pointer-events-auto fixed inset-0"
+                  onClick={() => {
+                    sfx.play("ui_cancel");
+                    setInteraction(idleInteraction());
+                    setMenuAnchorRect(null);
+                  }}
+                />
                 <CardMenu anchorRect={menuAnchorRect} items={menuItems} />
               </ContextMenuPortal>
             )}
 
             <EndScreen
-              visible={Boolean(endState) && !endScreenDismissed && !pveResultModal}
+              visible={endScreenVisible}
               won={endState === "VICTORY"}
               onLeave={returnToHome}
               onDismiss={() => setEndScreenDismissed(true)}
@@ -2250,7 +2599,7 @@ export default function HomePage() {
               rewardGold={pveResultModal?.rewardGold ?? 0}
               rewardCards={pveResultModal?.rewardCards ?? []}
               onLeave={returnToHome}
-              onClose={() => setPveResultModal(null)}
+              onCampaign={returnToCampaign}
               onRematch={requestRematch}
               canRematch={canRequestRematch}
               rematchBusy={rematchBusy}

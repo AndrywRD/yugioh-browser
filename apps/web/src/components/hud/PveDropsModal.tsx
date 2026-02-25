@@ -15,8 +15,8 @@ interface PveDropsModalProps {
   npcId: string;
   rewardGold: number;
   rewardCards: PveRewardCard[];
-  onClose: () => void;
   onLeave: () => void;
+  onCampaign: () => void;
   onRematch?: () => void;
   canRematch?: boolean;
   rematchBusy?: boolean;
@@ -28,8 +28,8 @@ export function PveDropsModal({
   npcId,
   rewardGold,
   rewardCards,
-  onClose,
   onLeave,
+  onCampaign,
   onRematch,
   canRematch = false,
   rematchBusy = false
@@ -101,17 +101,17 @@ export function PveDropsModal({
           ) : null}
           <button
             type="button"
-            onClick={onLeave}
-            className="rounded-lg border border-amber-300/60 bg-amber-700/85 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-600"
+            onClick={onCampaign}
+            className="rounded-lg border border-cyan-300/65 bg-cyan-700/80 px-4 py-2 text-sm font-semibold text-cyan-50 hover:bg-cyan-600"
           >
-            Voltar ao Lobby
+            Voltar Campanha
           </button>
           <button
             type="button"
-            onClick={onClose}
-            className="rounded-lg border border-slate-500/70 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-700"
+            onClick={onLeave}
+            className="rounded-lg border border-amber-300/60 bg-amber-700/85 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-600"
           >
-            Fechar
+            Voltar Lobby
           </button>
         </div>
       </div>

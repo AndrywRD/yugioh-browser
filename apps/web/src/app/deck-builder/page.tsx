@@ -39,10 +39,14 @@ import { SfxManager } from "../../lib/sfx";
 
 const PAGE_SIZE = 120;
 
-type SortMode = "NAME_ASC" | "ATK_DESC" | "DEF_DESC" | "NUMBER_ASC";
+type SortMode = "NAME_ASC" | "ATK_DESC" | "DEF_DESC" | "NUMBER_ASC" | "COST_ASC" | "RARITY";
+type KindFilter = "ALL" | "MONSTER" | "SPELL" | "TRAP";
+type DeckToolsTab = "SAVE" | "IMPORT_EXPORT" | "LOGS";
 type DeckBuilderCard = {
   id: string;
   name: string;
+  kind?: "MONSTER" | "SPELL" | "TRAP";
+  effectKey?: string;
   atk?: number;
   def?: number;
   tags: string[];
@@ -50,6 +54,7 @@ type DeckBuilderCard = {
   catalogNumber?: number;
   password?: string;
   cost?: number;
+  rarity?: "C" | "R" | "SR" | "UR";
   effectDescription?: string;
 };
 
@@ -59,6 +64,8 @@ function toDeckBuilderCard(entry: CollectionEntry): DeckBuilderCard {
     return {
       id: catalogCard.id,
       name: catalogCard.name,
+      kind: catalogCard.kind,
+      effectKey: catalogCard.effectKey,
       atk: catalogCard.atk,
       def: catalogCard.def,
       tags: [...catalogCard.tags],
@@ -73,6 +80,7 @@ function toDeckBuilderCard(entry: CollectionEntry): DeckBuilderCard {
   return {
     id: entry.cardId,
     name: entry.name,
+    kind: entry.kind,
     atk: entry.atk,
     def: entry.def,
     tags: [...entry.tags],
@@ -84,8 +92,13 @@ function toDeckBuilderCard(entry: CollectionEntry): DeckBuilderCard {
   };
 }
 
-function cardDisplayType(atk: number | undefined, def: number | undefined): string {
-  return (atk ?? 0) > 0 || (def ?? 0) > 0 ? "MONSTER" : "SPELL/TRAP";
+function cardDisplayType(card: { kind?: "MONSTER" | "SPELL" | "TRAP"; effectKey?: string; atk?: number; def?: number }): string {
+  if (card.kind === "TRAP") return "TRAP";
+  if (card.kind === "SPELL") {
+    if (card.effectKey === "EQUIP_CONTINUOUS" || card.effectKey === "EQUIP_BUFF_500") return "EQUIP";
+    return "SPELL";
+  }
+  return (card.atk ?? 0) > 0 || (card.def ?? 0) > 0 ? "MONSTER" : "SPELL/TRAP";
 }
 
 function formatError(error: unknown): string {
@@ -93,13 +106,52 @@ function formatError(error: unknown): string {
   return "Operacao nao concluida.";
 }
 
+function cloneDeckSnapshot(deck: Deck): Deck {
+  return {
+    ...deck,
+    cards: deck.cards.map((card) => ({ ...card }))
+  };
+}
+
+function normalizeDeckCardMap(deck: Deck): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const card of deck.cards) {
+    map.set(card.cardId, card.count);
+  }
+  return map;
+}
+
+function calculateDeckChangeCount(currentDeck: Deck | null, savedDeck: Deck | null): number {
+  if (!currentDeck) return 0;
+  if (!savedDeck) {
+    return currentDeck.cards.length + (currentDeck.name ? 1 : 0);
+  }
+
+  let changes = 0;
+  if (currentDeck.name !== savedDeck.name) changes += 1;
+
+  const currentMap = normalizeDeckCardMap(currentDeck);
+  const savedMap = normalizeDeckCardMap(savedDeck);
+  const ids = new Set([...currentMap.keys(), ...savedMap.keys()]);
+  for (const cardId of ids) {
+    if ((currentMap.get(cardId) ?? 0) !== (savedMap.get(cardId) ?? 0)) {
+      changes += 1;
+    }
+  }
+  return changes;
+}
+
 export default function DeckBuilderPage() {
-  const [connected, setConnected] = useState(false);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [collection, setCollection] = useState<DeckCollection>(() => ensureDeckCollection(null));
+  const [savedDeckSnapshots, setSavedDeckSnapshots] = useState<Record<string, Deck>>({});
+  const [undoStack, setUndoStack] = useState<Deck[]>([]);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
 
   const [query, setQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<KindFilter>("ALL");
+  const [onlyOutsideDeck, setOnlyOutsideDeck] = useState(false);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [atkMin, setAtkMin] = useState("0");
   const [atkMax, setAtkMax] = useState("5000");
@@ -107,8 +159,11 @@ export default function DeckBuilderPage() {
   const [defMax, setDefMax] = useState("5000");
   const [sortMode, setSortMode] = useState<SortMode>("NUMBER_ASC");
   const [page, setPage] = useState(1);
-
+  const [toolTab, setToolTab] = useState<DeckToolsTab>("SAVE");
   const [importText, setImportText] = useState("");
+  const [actionLogs, setActionLogs] = useState<string[]>([]);
+  const [saveError, setSaveError] = useState("");
+
   const [feedback, setFeedback] = useState("");
   const [syncError, setSyncError] = useState("");
   const [brokenImageIds, setBrokenImageIds] = useState<Record<string, true>>({});
@@ -120,6 +175,27 @@ export default function DeckBuilderPage() {
 
   const activeDeck = useMemo(() => getDeckById(collection, collection.activeDeckId), [collection]);
   const validation = useMemo(() => (activeDeck ? validateDeckForUi(activeDeck) : null), [activeDeck]);
+  const savedActiveDeck = useMemo(() => (activeDeck ? savedDeckSnapshots[activeDeck.id] ?? null : null), [activeDeck, savedDeckSnapshots]);
+  const pendingChanges = useMemo(() => calculateDeckChangeCount(activeDeck ?? null, savedActiveDeck), [activeDeck, savedActiveDeck]);
+  const hasUnsavedChanges = pendingChanges > 0;
+  const saveState = useMemo<"SAVED" | "DIRTY" | "ERROR">(() => {
+    if (saveError) return "ERROR";
+    if (hasUnsavedChanges) return "DIRTY";
+    return "SAVED";
+  }, [hasUnsavedChanges, saveError]);
+
+  const appendActionLog = (message: string) => {
+    const time = new Date().toLocaleTimeString("pt-BR", { hour12: false });
+    setActionLogs((current) => [`${time} | ${message}`, ...current].slice(0, 80));
+  };
+
+  const markDeckAsSaved = (deck: Deck) => {
+    setSavedDeckSnapshots((current) => ({
+      ...current,
+      [deck.id]: cloneDeckSnapshot(deck)
+    }));
+    setSaveError("");
+  };
   const ownedCountByCard = useMemo(() => {
     const map = new Map<string, number>();
     for (const entry of ownedCollection) {
@@ -161,6 +237,8 @@ export default function DeckBuilderPage() {
       const atk = card.atk ?? 0;
       const def = card.def ?? 0;
       if (q && !card.name.toLowerCase().includes(q)) return false;
+      if (kindFilter !== "ALL" && card.kind !== kindFilter) return false;
+      if (onlyOutsideDeck && (deckCountByCard.get(card.id) ?? 0) > 0) return false;
       if (atk < minAtk || atk > maxAtk) return false;
       if (def < minDef || def > maxDef) return false;
       if (selectedTags.length > 0 && !selectedTags.every((tag) => card.tags.includes(tag))) return false;
@@ -170,6 +248,16 @@ export default function DeckBuilderPage() {
     const sorted = [...base];
     if (sortMode === "NAME_ASC") {
       sorted.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortMode === "COST_ASC") {
+      sorted.sort((a, b) => (a.cost ?? Number.MAX_SAFE_INTEGER) - (b.cost ?? Number.MAX_SAFE_INTEGER) || a.name.localeCompare(b.name));
+    } else if (sortMode === "RARITY") {
+      const rarityRank: Record<string, number> = { UR: 0, SR: 1, R: 2, C: 3 };
+      sorted.sort((a, b) => {
+        const rankA = rarityRank[a.rarity ?? "C"] ?? 9;
+        const rankB = rarityRank[b.rarity ?? "C"] ?? 9;
+        if (rankA !== rankB) return rankA - rankB;
+        return a.name.localeCompare(b.name);
+      });
     } else if (sortMode === "ATK_DESC") {
       sorted.sort((a, b) => (b.atk ?? 0) - (a.atk ?? 0) || (b.def ?? 0) - (a.def ?? 0) || a.name.localeCompare(b.name));
     } else if (sortMode === "DEF_DESC") {
@@ -183,7 +271,7 @@ export default function DeckBuilderPage() {
       });
     }
     return sorted;
-  }, [query, atkMin, atkMax, defMin, defMax, selectedTags, sortMode, ownedCards]);
+  }, [query, kindFilter, onlyOutsideDeck, deckCountByCard, atkMin, atkMax, defMin, defMax, selectedTags, sortMode, ownedCards]);
 
   const totalPages = Math.max(1, Math.ceil(filteredCards.length / PAGE_SIZE));
   const pagedCards = useMemo(() => {
@@ -201,6 +289,8 @@ export default function DeckBuilderPage() {
         return {
           id: catalogCard.id,
           name: catalogCard.name,
+          kind: catalogCard.kind,
+          effectKey: catalogCard.effectKey,
           atk: catalogCard.atk,
           def: catalogCard.def,
           tags: [...catalogCard.tags],
@@ -237,6 +327,13 @@ export default function DeckBuilderPage() {
       activeDeckId: payload.activeDeckId
     });
     setCollection(remote);
+    const nextSnapshots: Record<string, Deck> = {};
+    for (const deck of remote.decks) {
+      nextSnapshots[deck.id] = cloneDeckSnapshot(deck);
+    }
+    setSavedDeckSnapshots(nextSnapshots);
+    setSaveError("");
+    setUndoStack([]);
     saveDeckCollection(remote);
     setSyncError("");
   };
@@ -249,8 +346,10 @@ export default function DeckBuilderPage() {
 
   const updateActiveDeck = (updater: (current: Deck) => Deck) => {
     if (!activeDeck) return;
+    setUndoStack((current) => [cloneDeckSnapshot(activeDeck), ...current].slice(0, 25));
     const updated = updater(activeDeck);
     persistCollection(upsertDeck(collection, updated));
+    setSaveError("");
   };
 
   const syncDeckToServer = (deck: Deck) => {
@@ -305,10 +404,8 @@ export default function DeckBuilderPage() {
     socket.connect();
 
     const onConnect = () => {
-      setConnected(true);
       socket.emit("auth:hello", storedPlayerId ? { storedPlayerId } : {});
     };
-    const onDisconnect = () => setConnected(false);
     const onSession = (payload: { playerId: string }) => {
       setPublicId(storedPlayerId);
       setPlayerId(payload.playerId);
@@ -320,17 +417,16 @@ export default function DeckBuilderPage() {
     };
     const onDeckError = (payload: { message: string }) => {
       setSyncError(payload.message);
+      setSaveError(payload.message);
     };
 
     socket.on("connect", onConnect);
-    socket.on("disconnect", onDisconnect);
     socket.on("auth:session", onSession);
     socket.on("deck:list", onDeckList);
     socket.on("deck:error", onDeckError);
 
     return () => {
       socket.off("connect", onConnect);
-      socket.off("disconnect", onDisconnect);
       socket.off("auth:session", onSession);
       socket.off("deck:list", onDeckList);
       socket.off("deck:error", onDeckError);
@@ -340,7 +436,7 @@ export default function DeckBuilderPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [query, selectedTags, atkMin, atkMax, defMin, defMax, sortMode]);
+  }, [query, kindFilter, onlyOutsideDeck, selectedTags, atkMin, atkMax, defMin, defMax, sortMode]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -352,7 +448,10 @@ export default function DeckBuilderPage() {
     const deck = createEmptyDeck(`Deck ${collection.decks.length + 1}`);
     const next = setDeckActive(upsertDeck(collection, deck), deck.id);
     persistCollection(next);
+    setSelectedCardId(null);
+    setSaveError("");
     setFeedback("Novo deck criado.");
+    appendActionLog(`Novo deck criado: ${deck.name}.`);
   };
 
   const handleDuplicateDeck = () => {
@@ -360,7 +459,9 @@ export default function DeckBuilderPage() {
     const copy = duplicateDeck(activeDeck);
     const next = setDeckActive(upsertDeck(collection, copy), copy.id);
     persistCollection(next);
+    setSaveError("");
     setFeedback("Deck duplicado.");
+    appendActionLog(`Deck duplicado: ${activeDeck.name} -> ${copy.name}.`);
   };
 
   const handleRenameDeck = () => {
@@ -381,7 +482,9 @@ export default function DeckBuilderPage() {
     const updated = renameDeck(activeDeck, trimmed);
     const optimistic = upsertDeck(collection, updated);
     persistCollection(optimistic);
+    setSaveError("");
     setFeedback("Renomeando deck...");
+    appendActionLog(`Renomeando deck para ${trimmed}...`);
 
     if (!publicId) {
       setFeedback("Deck renomeado localmente.");
@@ -393,10 +496,14 @@ export default function DeckBuilderPage() {
       .then((remote) => {
         applyRemoteDeckState(remote);
         setFeedback("Deck renomeado com sucesso.");
+        appendActionLog(`Deck renomeado para ${trimmed}.`);
       })
       .catch((error) => {
         persistCollection(previous);
-        setFeedback(`Falha ao renomear: ${formatError(error)}`);
+        const message = formatError(error);
+        setFeedback(`Falha ao renomear: ${message}`);
+        setSaveError(message);
+        appendActionLog(`Falha ao renomear deck: ${message}.`);
       })
       .finally(() => {
         setMutatingDeck(false);
@@ -409,7 +516,9 @@ export default function DeckBuilderPage() {
     const previous = collection;
     const next = removeDeck(collection, activeDeck.id);
     persistCollection(next);
+    setSaveError("");
     setFeedback("Removendo deck...");
+    appendActionLog(`Removendo deck ${activeDeck.name}...`);
 
     if (!publicId) {
       socket.emit("deck:delete", { deckId: activeDeck.id });
@@ -425,10 +534,14 @@ export default function DeckBuilderPage() {
       .then((remote) => {
         applyRemoteDeckState(remote);
         setFeedback("Deck removido com sucesso.");
+        appendActionLog(`Deck removido com sucesso.`);
       })
       .catch((error) => {
         persistCollection(previous);
-        setFeedback(`Falha ao remover deck: ${formatError(error)}`);
+        const message = formatError(error);
+        setFeedback(`Falha ao remover deck: ${message}`);
+        setSaveError(message);
+        appendActionLog(`Falha ao remover deck: ${message}.`);
       })
       .finally(() => {
         setMutatingDeck(false);
@@ -456,11 +569,13 @@ export default function DeckBuilderPage() {
       return;
     }
     updateActiveDeck((deck) => addCardToDeck(deck, cardId));
+    appendActionLog(`Adicionou ${CARD_INDEX[cardId]?.name ?? cardId}.`);
     sfx.play("ui_click");
   };
 
   const handleRemoveCard = (cardId: string) => {
     updateActiveDeck((deck) => removeCardFromDeck(deck, cardId));
+    appendActionLog(`Removeu ${CARD_INDEX[cardId]?.name ?? cardId}.`);
     sfx.play("ui_click");
   };
 
@@ -473,6 +588,8 @@ export default function DeckBuilderPage() {
     }
     if (!publicId) {
       syncDeckToServer(activeDeck);
+      markDeckAsSaved(activeDeck);
+      appendActionLog("Deck salvo via socket.");
       setFeedback("Deck salvo via socket.");
       return;
     }
@@ -483,9 +600,13 @@ export default function DeckBuilderPage() {
       .then((remote) => {
         applyRemoteDeckState(remote);
         setFeedback("Deck salvo no servidor.");
+        appendActionLog("Deck salvo no servidor.");
       })
       .catch((error) => {
-        setFeedback(`Falha ao salvar deck: ${formatError(error)}`);
+        const message = formatError(error);
+        setFeedback(`Falha ao salvar deck: ${message}`);
+        setSaveError(message);
+        appendActionLog(`Falha ao salvar deck: ${message}.`);
       })
       .finally(() => {
         setMutatingDeck(false);
@@ -494,30 +615,48 @@ export default function DeckBuilderPage() {
 
   const handleExportDeck = async () => {
     if (!activeDeck) return;
-    const text = exportDeckAsJson(activeDeck);
+    const serialized = exportDeckAsJson(activeDeck);
     try {
-      await navigator.clipboard.writeText(text);
-      setFeedback("Deck copiado para a area de transferencia.");
+      await navigator.clipboard.writeText(serialized);
+      setFeedback("JSON do deck copiado para a area de transferencia.");
+      appendActionLog("Deck exportado (clipboard).");
     } catch {
-      setImportText(text);
-      setFeedback("Nao foi possivel copiar. JSON colocado na caixa de importacao.");
+      setImportText(serialized);
+      setFeedback("Falha ao copiar. JSON carregado no campo de importacao.");
+      appendActionLog("Falha no clipboard; JSON carregado no campo.");
     }
   };
 
   const handleImportDeck = () => {
     try {
       const imported = importDeckFromJson(importText);
-      const withName = {
+      const withName: Deck = {
         ...imported,
         name: imported.name?.trim() ? imported.name : `Deck ${collection.decks.length + 1}`
       };
       const next = setDeckActive(upsertDeck(collection, withName), withName.id);
       persistCollection(next);
       setImportText("");
-      setFeedback("Deck importado.");
+      setSelectedCardId(null);
+      setSaveError("");
+      appendActionLog(`Deck importado: ${withName.name}.`);
+      setFeedback("Deck importado com sucesso.");
     } catch (error) {
-      setFeedback(formatError(error));
+      const message = formatError(error);
+      setFeedback(message);
+      setSaveError(message);
+      appendActionLog(`Falha ao importar deck: ${message}.`);
     }
+  };
+
+  const handleUndo = () => {
+    if (!activeDeck || undoStack.length === 0) return;
+    const [previous, ...rest] = undoStack;
+    setUndoStack(rest);
+    persistCollection(upsertDeck(collection, previous));
+    setSaveError("");
+    setFeedback("Ultima alteracao desfeita.");
+    appendActionLog("Desfez ultima alteracao.");
   };
 
   const handleTagToggle = (tag: string) => {
@@ -532,9 +671,11 @@ export default function DeckBuilderPage() {
   const handleSetActiveDeck = (deckId: string) => {
     const previous = collection;
     persistCollection(setDeckActive(collection, deckId));
+    setUndoStack([]);
 
     if (!publicId) {
       socket.emit("deck:setActive", { deckId });
+      setFeedback("Deck ativo atualizado localmente.");
       return;
     }
 
@@ -542,32 +683,127 @@ export default function DeckBuilderPage() {
     void setActiveDeckOnServer(publicId, deckId)
       .then((remote) => {
         applyRemoteDeckState(remote);
+        appendActionLog("Deck ativo atualizado.");
       })
       .catch((error) => {
         persistCollection(previous);
-        setFeedback(`Falha ao ativar deck: ${formatError(error)}`);
+        const message = formatError(error);
+        setFeedback(`Falha ao ativar deck: ${message}`);
+        setSaveError(message);
+        appendActionLog(`Falha ao ativar deck: ${message}.`);
       })
       .finally(() => {
         setMutatingDeck(false);
       });
   };
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTypingTarget =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT" ||
+        target?.isContentEditable;
+      if (isTypingTarget) return;
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      if (!selectedCard) return;
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        handleAddCard(selectedCard.id);
+        return;
+      }
+
+      if (event.key === "Backspace") {
+        event.preventDefault();
+        handleRemoveCard(selectedCard.id);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedCard, undoStack, collection, activeDeck]);
+
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  const selectedCardDeckCount = selectedCard ? deckCountByCard.get(selectedCard.id) ?? 0 : 0;
+  const selectedCardOwnedCount = selectedCard ? ownedCountByCard.get(selectedCard.id) ?? 0 : 0;
+  const deckTotal = validation?.total ?? 0;
   return (
     <HudStage>
-      <header className="fm-panel fm-frame mx-auto mb-4 flex w-full max-w-[1700px] items-center justify-between rounded-xl px-4 py-3">
-        <div>
+      <header className="fm-panel fm-frame mx-auto mb-4 grid w-full max-w-[1700px] gap-3 rounded-xl px-4 py-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_auto] xl:items-center">
+        <div className="min-w-0">
           <h1 className="fm-title text-xl font-bold">Deck Builder</h1>
-          <p className="fm-subtitle text-xs">
-            Socket: {connected ? "conectado" : "desconectado"} {playerId ? `| Sessao: ${playerId}` : ""}
-            {publicId ? ` | Perfil: ${publicId}` : ""}
-          </p>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <select
+              value={collection.activeDeckId ?? ""}
+              onChange={(event) => handleSetActiveDeck(event.target.value)}
+              disabled={mutatingDeck}
+              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
+            >
+              {collection.decks.map((deck) => (
+                <option key={deck.id} value={deck.id}>
+                  {deck.name}
+                </option>
+              ))}
+            </select>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="font-semibold text-cyan-100">{deckTotal}/40</span>
+              <span className={`rounded px-2 py-0.5 text-xs font-semibold ${validation?.ok ? "bg-emerald-900/35 text-emerald-100" : "bg-amber-900/35 text-amber-100"}`}>
+                {validation?.ok ? "Deck valido" : "Ajustes pendentes"}
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={handleCreateDeck} disabled={mutatingDeck} className="fm-button rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+              Novo
+            </button>
+            <button type="button" onClick={handleDuplicateDeck} disabled={mutatingDeck || !activeDeck} className="fm-button rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+              Duplicar
+            </button>
+            <button type="button" onClick={handleRenameDeck} disabled={mutatingDeck || !activeDeck} className="fm-button rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+              Renomear
+            </button>
+            <button type="button" onClick={handleDeleteDeck} disabled={mutatingDeck || !activeDeck} className="rounded-lg border border-rose-400/55 bg-rose-900/25 px-3 py-2 text-xs font-semibold text-rose-100 disabled:cursor-not-allowed disabled:opacity-45">
+              Excluir
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-start gap-2 xl:justify-end">
+          <button
+            type="button"
+            onClick={handleSaveDeck}
+            disabled={!validation?.ok || !hasUnsavedChanges || mutatingDeck}
+            className="rounded-lg border border-amber-200/75 bg-[linear-gradient(180deg,rgba(176,118,30,0.95),rgba(125,82,18,0.98))] px-4 py-2 text-xs font-semibold text-amber-50 shadow-[inset_0_1px_0_rgba(255,228,175,0.35),0_8px_16px_rgba(0,0,0,0.25)] disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {mutatingDeck ? "Salvando..." : "Salvar alteracoes"}
+          </button>
           <button
             type="button"
             onClick={() => {
               socket.emit("deck:list", {});
               void loadOwnedCollection();
+              appendActionLog("Sincronizacao solicitada.");
             }}
             disabled={mutatingDeck}
             className="fm-button rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45"
@@ -580,32 +816,18 @@ export default function DeckBuilderPage() {
         </div>
       </header>
 
-      <section className="mx-auto grid w-full max-w-[1700px] gap-3 xl:grid-cols-[1.45fr_1fr_0.8fr]">
-        <article className="fm-panel fm-frame rounded-xl p-3">
-          <div className="mb-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs">
-              <p className="text-slate-400">Cartas unicas na colecao</p>
-              <p className="text-sm font-semibold text-emerald-200">{ownedCollection.length}</p>
-            </div>
-            <div className="rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs">
-              <p className="text-slate-400">Copias totais</p>
-              <p className="text-sm font-semibold text-emerald-200">{ownedCopiesTotal}</p>
-            </div>
-            <div className="rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs">
-              <p className="text-slate-400">Cartas filtradas</p>
-              <p className="text-sm font-semibold text-cyan-200">{filteredCards.length}</p>
-            </div>
-            <div className="rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs">
-              <p className="text-slate-400">Deck ativo</p>
-              <p className="truncate text-sm font-semibold text-slate-100">{activeDeck?.name ?? "Sem deck"}</p>
-            </div>
+      <section className="mx-auto grid w-full max-w-[1700px] gap-4 lg:grid-cols-2 xl:grid-cols-[34fr_36fr_30fr]">
+        <article className="fm-panel fm-frame rounded-xl p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-slate-100">Colecao</h2>
+            <span className="text-xs text-slate-300">{collectionLoading ? "Atualizando..." : `${filteredCards.length} cartas`}</span>
           </div>
 
-          <div className="mb-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          <div className="mb-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_200px_auto]">
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Buscar por nome"
+              placeholder="Buscar carta..."
               className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
             />
             <select
@@ -613,40 +835,84 @@ export default function DeckBuilderPage() {
               onChange={(event) => setSortMode(event.target.value as SortMode)}
               className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
             >
-              <option value="NUMBER_ASC">Numero (asc)</option>
-              <option value="NAME_ASC">Nome (A-Z)</option>
-              <option value="ATK_DESC">ATK (desc)</option>
-              <option value="DEF_DESC">DEF (desc)</option>
+              <option value="NAME_ASC">Nome</option>
+              <option value="COST_ASC">Custo</option>
+              <option value="ATK_DESC">ATK</option>
+              <option value="DEF_DESC">DEF</option>
+              <option value="RARITY">Raridade</option>
+              <option value="NUMBER_ASC">Numero</option>
             </select>
-            <input value={atkMin} onChange={(event) => setAtkMin(event.target.value)} placeholder="ATK min" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm" />
-            <input value={atkMax} onChange={(event) => setAtkMax(event.target.value)} placeholder="ATK max" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm" />
-            <input value={defMin} onChange={(event) => setDefMin(event.target.value)} placeholder="DEF min" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm" />
-            <input value={defMax} onChange={(event) => setDefMax(event.target.value)} placeholder="DEF max" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm" />
+            <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-200">
+              <input type="checkbox" checked={onlyOutsideDeck} onChange={(event) => setOnlyOutsideDeck(event.target.checked)} className="h-3.5 w-3.5" />
+              Fora do deck
+            </label>
           </div>
 
-          <div className="mb-3 max-h-24 overflow-auto rounded-lg border border-slate-800 bg-slate-950/40 p-2">
-            <div className="flex flex-wrap gap-2">
-              {tagOptions.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => handleTagToggle(tag)}
-                  className={`rounded-full border px-2 py-0.5 text-[11px] ${
-                    selectedTags.includes(tag) ? "border-cyan-300 bg-cyan-800/40 text-cyan-100" : "border-slate-600 bg-slate-800 text-slate-300"
-                  }`}
-                >
-                  {tag}
-                </button>
-              ))}
-            </div>
+          <div className="mb-2 flex flex-wrap gap-2">
+            {(["ALL", "MONSTER", "SPELL", "TRAP"] as const).map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => setKindFilter(kind)}
+                className={`rounded-full border px-2 py-1 text-[11px] ${
+                  kindFilter === kind ? "border-cyan-300/70 bg-cyan-900/35 text-cyan-100" : "border-slate-600 bg-slate-800 text-slate-300"
+                }`}
+              >
+                {kind === "ALL" ? "Todos" : kind}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowAdvancedFilters((current) => !current)}
+              className="rounded-full border border-slate-600 bg-slate-800 px-2 py-1 text-[11px] text-slate-300"
+            >
+              {showAdvancedFilters ? "Ocultar filtros" : "Filtros avancados"}
+            </button>
           </div>
+
+          {showAdvancedFilters ? (
+            <div className="mb-3 rounded-lg bg-slate-950/45 p-2">
+              <div className="mb-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <input value={atkMin} onChange={(event) => setAtkMin(event.target.value)} placeholder="ATK min" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm" />
+                <input value={atkMax} onChange={(event) => setAtkMax(event.target.value)} placeholder="ATK max" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm" />
+                <input value={defMin} onChange={(event) => setDefMin(event.target.value)} placeholder="DEF min" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm" />
+                <input value={defMax} onChange={(event) => setDefMax(event.target.value)} placeholder="DEF max" className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm" />
+              </div>
+              <div className="mb-2 max-h-20 overflow-auto rounded-lg bg-slate-900/70 p-2">
+                <div className="flex flex-wrap gap-2">
+                  {tagOptions.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => handleTagToggle(tag)}
+                      className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                        selectedTags.includes(tag) ? "border-cyan-300 bg-cyan-800/40 text-cyan-100" : "border-slate-600 bg-slate-800 text-slate-300"
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedTags([]);
+                  setAtkMin("0");
+                  setAtkMax("5000");
+                  setDefMin("0");
+                  setDefMax("5000");
+                  appendActionLog("Filtros avancados limpos.");
+                }}
+                className="fm-button rounded-md px-2 py-1 text-xs font-semibold"
+              >
+                Limpar filtros
+              </button>
+            </div>
+          ) : null}
 
           <div className="mb-3 flex items-center justify-between text-xs text-slate-300">
-            <span>
-              {collectionLoading
-                ? "Atualizando colecao..."
-                : `Mostrando cartas da sua colecao: ${filteredCards.length} | Pagina ${page}/${totalPages}`}
-            </span>
+            <span>Pagina {page}/{totalPages}</span>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -708,12 +974,11 @@ export default function DeckBuilderPage() {
                   )}
                   <p className="truncate text-xs font-semibold">{card.name}</p>
                   <p className="text-[11px] text-slate-300">
-                    #{card.catalogNumber ?? "--"} | {card.atk ?? 0}/{card.def ?? 0}
+                    {cardDisplayType(card)} | {card.atk ?? 0}/{card.def ?? 0}
                   </p>
                   <div className="mt-1 flex items-center justify-between">
                     <span className="text-[11px] text-emerald-300">Possui: {ownedCopies}</span>
                     <span className="text-[11px] text-cyan-300">No deck: {inDeck}</span>
-                    <span className="text-[10px] text-slate-400">{cardDisplayType(card.atk, card.def)}</span>
                   </div>
                   <div className="mt-2 flex gap-1">
                     <button
@@ -744,115 +1009,167 @@ export default function DeckBuilderPage() {
           </div>
         </article>
 
-        <article className="fm-panel fm-frame rounded-xl p-3">
-          <div className="mb-2 flex flex-wrap gap-2">
-            <select
-              value={collection.activeDeckId ?? ""}
-              onChange={(event) => handleSetActiveDeck(event.target.value)}
-              disabled={mutatingDeck}
-              className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
-            >
-              {collection.decks.map((deck) => (
-                <option key={deck.id} value={deck.id}>
-                  {deck.name}
-                </option>
-              ))}
-            </select>
-            <button type="button" onClick={handleCreateDeck} disabled={mutatingDeck} className="fm-button rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
-              Novo
-            </button>
-            <button type="button" onClick={handleDuplicateDeck} disabled={mutatingDeck} className="fm-button rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
-              Duplicar
-            </button>
-            <button type="button" onClick={handleRenameDeck} disabled={mutatingDeck} className="fm-button rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
-              Renomear
-            </button>
-            <button type="button" onClick={handleDeleteDeck} disabled={mutatingDeck} className="fm-button rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
-              Excluir
-            </button>
+        <article className="fm-panel fm-frame rounded-xl p-4">
+          <div className="mb-3">
+            <div className="mb-1 flex items-center justify-between">
+              <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-slate-100">Deck</h2>
+              <span className="text-lg font-bold text-cyan-100">{deckTotal}/40</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded bg-slate-800">
+              <div
+                className={`h-full rounded ${validation?.ok ? "bg-emerald-400/80" : "bg-amber-400/80"}`}
+                style={{ width: `${Math.min(100, (deckTotal / 40) * 100)}%` }}
+              />
+            </div>
+            <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
+              <span className={`rounded px-2 py-0.5 ${validation?.ok ? "bg-emerald-900/35 text-emerald-100" : "bg-amber-900/35 text-amber-100"}`}>
+                {validation?.ok ? "Deck valido" : `Faltam ${Math.max(0, 40 - deckTotal)} cartas`}
+              </span>
+              {saveState === "DIRTY" ? <span className="rounded bg-amber-900/35 px-2 py-0.5 text-amber-100">Alteracoes pendentes</span> : null}
+              {saveState === "ERROR" ? <span className="rounded bg-rose-900/35 px-2 py-0.5 text-rose-100">Erro no salvamento</span> : null}
+            </div>
           </div>
 
-          <div
-            className={`mb-3 rounded-lg border px-3 py-2 text-sm ${
-              validation?.ok ? "border-emerald-500/70 bg-emerald-900/30 text-emerald-200" : "border-rose-500/70 bg-rose-900/30 text-rose-200"
-            }`}
-          >
-            <p className="font-semibold">
-              {activeDeck?.name ?? "Sem deck"} | Total: {validation?.total ?? 0}/40
-            </p>
-            {!validation?.ok && validation?.errors[0] ? <p className="text-xs">{validation.errors[0]}</p> : <p className="text-xs">Deck valido.</p>}
-          </div>
-
-          <div className="mb-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleSaveDeck}
-              disabled={!validation?.ok}
-              className="fm-button rounded-lg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              Salvar no Servidor
-            </button>
-            <button type="button" onClick={handleExportDeck} className="fm-button rounded-lg px-3 py-2 text-xs font-semibold">
-              Exportar JSON
-            </button>
-            <button type="button" onClick={handleImportDeck} className="fm-button rounded-lg px-3 py-2 text-xs font-semibold">
-              Importar JSON
-            </button>
-          </div>
-
-          <textarea
-            value={importText}
-            onChange={(event) => setImportText(event.target.value)}
-            placeholder='Cole JSON do deck aqui para importar'
-            className="mb-3 h-24 w-full rounded-lg border border-slate-700 bg-slate-800 p-2 text-xs"
-          />
-
-          <div className="max-h-[56vh] overflow-y-auto overflow-x-hidden rounded-lg border border-slate-800 bg-slate-950/50 p-2 pb-5">
+          <div className="max-h-[44vh] overflow-y-auto overflow-x-hidden rounded-lg bg-slate-950/50 p-2">
             {deckRows.length === 0 ? (
               <p className="text-xs text-slate-400">Deck vazio.</p>
             ) : (
               <ul className="grid gap-2">
-                {deckRows.map(({ entry, card }) => (
-                  <li key={entry.cardId} className="grid min-h-[52px] grid-cols-[1fr_auto] items-center gap-2 rounded bg-slate-900/80 p-2 text-xs leading-5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!card) return;
-                        sfx.play("ui_click");
-                        setSelectedCardId(card.id);
-                      }}
-                      className={`truncate text-left leading-tight ${card ? "text-slate-100 hover:text-cyan-200" : "text-amber-300"}`}
-                    >
-                      {card ? `${card.name} (${entry.count})` : `[Removida] ${entry.cardId} (${entry.count})`}
-                    </button>
-                    <div className="flex gap-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!card) return;
-                          handleAddCard(card.id);
-                        }}
-                        disabled={!card}
-                        className="h-7 min-w-7 rounded bg-emerald-700 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-45"
-                      >
-                        +
-                      </button>
-                      <button type="button" onClick={() => handleRemoveCard(entry.cardId)} className="h-7 min-w-7 rounded bg-rose-700 px-2 py-1">
-                        -
-                      </button>
-                    </div>
-                  </li>
-                ))}
+                {deckRows.map(({ entry, card }) => {
+                  const ownedCopies = ownedCountByCard.get(entry.cardId) ?? 0;
+                  const canIncrease = Boolean(card) && entry.count < Math.min(3, ownedCopies) && deckTotal < 40;
+                  return (
+                    <li key={entry.cardId} className="grid min-h-[56px] grid-cols-[1fr_auto] items-center gap-2 rounded bg-slate-900/80 p-2 text-xs">
+                      <div className="min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!card) return;
+                            sfx.play("ui_click");
+                            setSelectedCardId(card.id);
+                          }}
+                          className={`truncate text-left leading-tight ${card ? "text-slate-100 hover:text-cyan-200" : "text-amber-300"}`}
+                        >
+                          {card ? card.name : `[Removida] ${entry.cardId}`}
+                        </button>
+                        {card ? (
+                          <p className="truncate text-[11px] text-slate-400">
+                            {cardDisplayType(card)} {card.kind === "MONSTER" ? `| ATK ${card.atk ?? 0} / DEF ${card.def ?? 0}` : ""}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button type="button" onClick={() => handleRemoveCard(entry.cardId)} className="h-7 min-w-7 rounded bg-rose-700 px-2 py-1 font-semibold">
+                          -
+                        </button>
+                        <span className="w-7 text-center text-sm font-semibold text-slate-100">{entry.count}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!card) return;
+                            handleAddCard(card.id);
+                          }}
+                          disabled={!canIncrease}
+                          className="h-7 min-w-7 rounded bg-emerald-700 px-2 py-1 font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
+
+          <div className="mt-3 rounded-lg bg-slate-950/45 p-2">
+            <div className="mb-2 flex flex-wrap gap-2">
+              {([
+                ["SAVE", "Salvar"],
+                ["IMPORT_EXPORT", "Importar/Exportar"],
+                ["LOGS", "Logs"]
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setToolTab(key)}
+                  className={`rounded-md px-2 py-1 text-xs font-semibold ${
+                    toolTab === key ? "bg-cyan-900/40 text-cyan-100 ring-1 ring-cyan-300/55" : "bg-slate-800 text-slate-300"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {toolTab === "SAVE" ? (
+              <div className="space-y-2 text-xs text-slate-300">
+                <p>{hasUnsavedChanges ? `${pendingChanges} alteracao(oes) pendente(s).` : "Tudo salvo."}</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveDeck}
+                    disabled={!validation?.ok || !hasUnsavedChanges || mutatingDeck}
+                    className="fm-button rounded-md px-3 py-1.5 font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    Salvar no servidor
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUndo}
+                    disabled={undoStack.length === 0}
+                    className="fm-button rounded-md px-3 py-1.5 font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    Desfazer (Ctrl+Z)
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {toolTab === "IMPORT_EXPORT" ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={handleExportDeck} className="fm-button rounded-md px-3 py-1.5 text-xs font-semibold">
+                    Exportar JSON
+                  </button>
+                  <button type="button" onClick={handleImportDeck} className="fm-button rounded-md px-3 py-1.5 text-xs font-semibold">
+                    Colar e importar
+                  </button>
+                </div>
+                <textarea
+                  value={importText}
+                  onChange={(event) => setImportText(event.target.value)}
+                  placeholder='Cole JSON do deck para importar'
+                  className="h-24 w-full rounded-lg border border-slate-700 bg-slate-800 p-2 text-xs"
+                />
+              </div>
+            ) : null}
+
+            {toolTab === "LOGS" ? (
+              <div className="space-y-2 text-xs">
+                <div className="max-h-28 overflow-y-auto rounded bg-slate-900/70 p-2">
+                  {actionLogs.length === 0 ? (
+                    <p className="text-slate-400">Sem eventos recentes.</p>
+                  ) : (
+                    <ul className="space-y-1 text-slate-300">
+                      {actionLogs.map((line, index) => (
+                        <li key={`${line}-${index}`}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <p className="text-slate-300">{feedback || "Sem mensagens."}</p>
+                {syncError ? <p className="text-rose-300">Sync: {syncError}</p> : null}
+              </div>
+            ) : null}
+          </div>
         </article>
 
-        <article className="fm-panel fm-frame rounded-xl p-3">
-          <h2 className="mb-2 text-sm font-semibold text-slate-200">Preview</h2>
+        <article className="fm-panel fm-frame rounded-xl p-4 lg:col-span-2 xl:col-span-1">
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.08em] text-slate-200">Preview</h2>
           {selectedCard ? (
-            <div className="space-y-2">
-              <div className="group relative flex h-[520px] items-center justify-center overflow-hidden rounded-lg border border-slate-700 bg-slate-900/70 p-3">
+            <div className="space-y-3">
+              <div className="group relative flex h-[480px] items-center justify-center overflow-hidden rounded-lg border border-slate-700 bg-slate-900/70 p-3">
                 {selectedCard.imagePath && !brokenImageIds[selectedCard.id] ? (
                   <img
                     src={selectedCard.imagePath}
@@ -866,11 +1183,27 @@ export default function DeckBuilderPage() {
               </div>
               <h3 className="text-sm font-semibold text-cyan-100">{selectedCard.name}</h3>
               <p className="text-xs text-slate-300">
-                #{selectedCard.catalogNumber ?? "--"} | ATK {selectedCard.atk ?? 0} / DEF {selectedCard.def ?? 0}
+                {cardDisplayType(selectedCard)} | ATK {selectedCard.atk ?? 0} / DEF {selectedCard.def ?? 0}
               </p>
-              <p className="text-xs text-slate-300">
-                Password: {selectedCard.password ?? "--"} | Cost: {selectedCard.cost ?? "--"}
-              </p>
+              <p className="text-xs text-slate-300">No deck: {selectedCardDeckCount} | Na colecao: {selectedCardOwnedCount}</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleAddCard(selectedCard.id)}
+                  disabled={selectedCardDeckCount >= Math.min(3, selectedCardOwnedCount) || deckIsFull}
+                  className="fm-button rounded-md px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Adicionar ao deck
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveCard(selectedCard.id)}
+                  disabled={selectedCardDeckCount <= 0}
+                  className="rounded-md border border-rose-400/50 bg-rose-900/25 px-3 py-1.5 text-xs font-semibold text-rose-100 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Remover do deck
+                </button>
+              </div>
               {selectedCard.effectDescription ? (
                 <div className="rounded-lg border border-violet-400/35 bg-violet-950/35 px-2 py-1.5 text-xs leading-relaxed text-violet-100">
                   {selectedCard.effectDescription}
@@ -887,12 +1220,6 @@ export default function DeckBuilderPage() {
           ) : (
             <p className="text-xs text-slate-400">Selecione uma carta para visualizar.</p>
           )}
-
-          <div className="mt-4 rounded-lg border border-slate-700 bg-slate-950/50 p-2 text-xs">
-            <p className="font-semibold text-slate-200">Feedback</p>
-            <p className="text-slate-300">{feedback || "Sem mensagens."}</p>
-            {syncError ? <p className="mt-1 text-rose-300">Sync: {syncError}</p> : null}
-          </div>
         </article>
       </section>
     </HudStage>

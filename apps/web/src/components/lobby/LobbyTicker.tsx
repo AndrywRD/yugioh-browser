@@ -33,7 +33,7 @@ export function LobbyTicker({ messages, onRemove }: LobbyTickerProps) {
   if (messages.length === 0) return null;
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-[calc(100%+10px)] z-[3] mx-auto flex w-full max-w-[980px] flex-col gap-2 px-1">
+    <div className="flex flex-col gap-2">
       {messages.slice(0, 3).map((message) => (
         <div
           key={message.id}
@@ -45,4 +45,3 @@ export function LobbyTicker({ messages, onRemove }: LobbyTickerProps) {
     </div>
   );
 }
-

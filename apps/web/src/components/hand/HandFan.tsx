@@ -9,6 +9,7 @@ interface HandFanProps {
   selectedIds: string[];
   highlightedIds?: string[];
   badgeById?: Record<string, string>;
+  registerCardElement?: (instanceId: string, element: HTMLButtonElement | null) => void;
   onCardClick: (card: CardClientView, index: number, anchorRect: AnchorRect) => void;
   onCardHover?: (card: CardClientView | null, anchorRect: AnchorRect | null) => void;
 }
@@ -21,7 +22,7 @@ const CARD_W = 110;
 const CARD_H = 154;
 const BASE_GAP = 12;
 
-export function HandFan({ cards, selectedIds, highlightedIds, badgeById, onCardClick, onCardHover }: HandFanProps) {
+export function HandFan({ cards, selectedIds, highlightedIds, badgeById, registerCardElement, onCardClick, onCardHover }: HandFanProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const holdTimerRef = useRef<number | null>(null);
 
@@ -68,6 +69,7 @@ export function HandFan({ cards, selectedIds, highlightedIds, badgeById, onCardC
               <button
                 key={card.instanceId}
                 type="button"
+                ref={(element) => registerCardElement?.(card.instanceId, element)}
                 onClick={(event) => onCardClick(card, index, toAnchorRect(event.currentTarget.getBoundingClientRect()))}
                 onMouseEnter={(event) => {
                   const anchorRect = toAnchorRect(event.currentTarget.getBoundingClientRect());

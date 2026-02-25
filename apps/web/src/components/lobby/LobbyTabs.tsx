@@ -16,7 +16,7 @@ const TAB_ITEMS: Array<{ key: LobbySection; label: string; icon: "campaign" | "o
 
 export function LobbyTabs({ active, onChange, disabled = false }: LobbyTabsProps) {
   return (
-    <nav className="fm-scroll flex gap-2 overflow-x-auto rounded-xl border border-[#cfa75d]/45 bg-[linear-gradient(180deg,rgba(7,18,38,0.9),rgba(5,12,30,0.92))] p-2">
+    <nav className="fm-scroll flex gap-2 overflow-x-auto rounded-xl border border-[#cfa75d]/35 bg-[linear-gradient(180deg,rgba(7,17,36,0.82),rgba(5,11,27,0.86))] p-1.5">
       {TAB_ITEMS.map((item) => {
         const isActive = item.key === active;
         return (
@@ -25,10 +25,10 @@ export function LobbyTabs({ active, onChange, disabled = false }: LobbyTabsProps
             type="button"
             disabled={disabled}
             onClick={() => onChange(item.key)}
-            className={`lobby-pressable lobby-tab-button inline-flex min-w-[132px] items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] transition ${
+            className={`lobby-pressable lobby-tab-button inline-flex min-w-[130px] items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold uppercase tracking-[0.07em] transition ${
               isActive
-                ? "lobby-tab-button-active border-amber-200/85 bg-[linear-gradient(180deg,rgba(174,118,28,0.94),rgba(115,76,18,0.98))] text-amber-50 shadow-[inset_0_1px_0_rgba(255,233,181,0.28)]"
-                : "border-amber-200/35 bg-[linear-gradient(180deg,rgba(15,39,74,0.9),rgba(9,26,52,0.92))] text-slate-100 hover:border-amber-200/70 hover:-translate-y-0.5"
+                ? "lobby-tab-button-active border-amber-200/75 bg-[linear-gradient(180deg,rgba(150,102,28,0.86),rgba(95,63,16,0.9))] text-amber-50"
+                : "border-slate-600/65 bg-[linear-gradient(180deg,rgba(12,29,58,0.66),rgba(8,20,42,0.72))] text-slate-200 hover:border-amber-200/45"
             } disabled:cursor-not-allowed disabled:opacity-45`}
           >
             <LobbyIcon kind={item.icon} className="h-3.5 w-3.5" />

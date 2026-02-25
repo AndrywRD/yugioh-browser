@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from
 import type { CardClientView, MonsterClientView, SpellTrapClientView } from "@ruptura-arcana/shared";
 import { CardView } from "../card/CardView";
 import { toAnchorRect, type AnchorRect } from "../../lib/anchors";
+import { buildSlotRectId } from "../../lib/animation/rectRegistry";
 import { Board } from "./Board";
 import { Highlights } from "./Highlights";
 import { TargetingOverlay } from "./TargetingOverlay";
@@ -51,6 +52,9 @@ interface BoardStageProps {
   targetingMode?: "ATTACK" | "FUSION" | null;
   attackEffectSlot?: SlotMarker | null;
   hitEffectSlot?: SlotMarker | null;
+  inputLocked?: boolean;
+  registerCardElement?: (instanceId: string, element: HTMLButtonElement | null) => void;
+  registerSlotElement?: (slotId: string, element: HTMLButtonElement | null) => void;
   onClickSlot: (slotIndex: number, side: BoardSlotSide, zone: BoardSlotZone, anchorRect: AnchorRect) => void;
   onHoverSlot?: (slotIndex: number, side: BoardSlotSide, zone: BoardSlotZone, anchorRect: AnchorRect | null) => void;
   onHoverMonster?: (
@@ -145,6 +149,9 @@ export function BoardStage({
   targetingMode,
   attackEffectSlot,
   hitEffectSlot,
+  inputLocked = false,
+  registerCardElement,
+  registerSlotElement,
   onClickSlot,
   onHoverSlot,
   onHoverMonster
@@ -155,6 +162,17 @@ export function BoardStage({
 
   const zoneCountMap = useMemo(() => zoneCounts ?? {}, [zoneCounts]);
   const zoneCardMap = useMemo(() => zoneCards ?? {}, [zoneCards]);
+  const boardInputLocked = Boolean(inputLocked || graveViewerZone);
+
+  const registerSlotRef = (side: BoardSlotSide, zone: BoardSlotZone, slotIndex: number, cardInstanceId?: string) => {
+    const slotId = buildSlotRectId(side, zone, slotIndex);
+    return (element: HTMLButtonElement | null) => {
+      registerSlotElement?.(slotId, element);
+      if (cardInstanceId) {
+        registerCardElement?.(cardInstanceId, element);
+      }
+    };
+  };
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -167,6 +185,7 @@ export function BoardStage({
   }, []);
 
   const handleZoneClick = (event: ReactMouseEvent<HTMLButtonElement>, zoneId: ZoneId) => {
+    if (boardInputLocked) return;
     event.stopPropagation();
     if (isGraveZone(zoneId)) {
       setZonePopover(null);
@@ -182,6 +201,7 @@ export function BoardStage({
   };
 
   const handleSlotClick = (event: ReactMouseEvent<HTMLButtonElement>, slotIndex: number, side: BoardSlotSide, zone: BoardSlotZone) => {
+    if (boardInputLocked) return;
     setZonePopover(null);
     setGraveViewerZone(null);
     onClickSlot(slotIndex, side, zone, toAnchorRect(event.currentTarget.getBoundingClientRect()));
@@ -216,7 +236,7 @@ export function BoardStage({
               key={zone.id}
               type="button"
               onClick={(event) => handleZoneClick(event, zone.id)}
-              className={`pointer-events-auto absolute rounded-md border border-amber-300/35 bg-black/25 shadow-[0_8px_14px_rgba(0,0,0,0.35)] transition-all hover:border-amber-200/70 hover:bg-black/35 ${
+              className={`${boardInputLocked ? "pointer-events-none" : "pointer-events-auto"} absolute rounded-md border border-amber-300/35 bg-black/25 shadow-[0_8px_14px_rgba(0,0,0,0.35)] transition-all hover:border-amber-200/70 hover:bg-black/35 ${
                 debugSlots ? "ring-1 ring-cyan-300/80" : ""
               }`}
               style={{ left: `${zone.left}%`, top: `${zone.top}%`, width: `${zone.w}%`, height: `${zone.h}%` }}
@@ -289,7 +309,7 @@ export function BoardStage({
 
       {graveViewerZone && (
         <div
-          className="absolute inset-0 z-modal flex items-center justify-center bg-black/55 p-4"
+          className="fixed inset-0 z-[140] flex items-center justify-center bg-black/55 p-4"
           onClick={() => setGraveViewerZone(null)}
         >
           <div
@@ -365,6 +385,7 @@ export function BoardStage({
             <button
               key={`enemy-${slotIndex}`}
               type="button"
+              ref={registerSlotRef("ENEMY", "MONSTER", slotIndex, monster?.instanceId)}
               onClick={(event) => handleSlotClick(event, slotIndex, "ENEMY", "MONSTER")}
               onMouseEnter={(event) => {
                 const anchorRect = toAnchorRect(event.currentTarget.getBoundingClientRect());
@@ -388,7 +409,7 @@ export function BoardStage({
                 onHoverSlot?.(slotIndex, "ENEMY", "MONSTER", null);
                 onHoverMonster?.(null, null);
               }}
-              className={`pointer-events-auto absolute rounded-md border transition-all duration-150 ${
+              className={`${boardInputLocked ? "pointer-events-none" : "pointer-events-auto"} absolute rounded-md border transition-all duration-150 ${
                 hasMonster
                   ? "border-rose-400/60 bg-rose-900/20 hover:border-rose-300 hover:bg-rose-800/20"
                   : "border-amber-200/25 bg-black/10 hover:border-amber-100/55"
@@ -449,6 +470,7 @@ export function BoardStage({
             <button
               key={`enemy-spell-${slotIndex}`}
               type="button"
+              ref={registerSlotRef("ENEMY", "SPELL_TRAP", slotIndex, card?.instanceId)}
               onClick={(event) => handleSlotClick(event, slotIndex, "ENEMY", "SPELL_TRAP")}
               onMouseEnter={(event) => {
                 const anchorRect = toAnchorRect(event.currentTarget.getBoundingClientRect());
@@ -471,7 +493,7 @@ export function BoardStage({
                 onHoverSlot?.(slotIndex, "ENEMY", "SPELL_TRAP", null);
                 onHoverMonster?.(null, null);
               }}
-              className={`pointer-events-auto absolute rounded-md border transition-all duration-150 ${
+              className={`${boardInputLocked ? "pointer-events-none" : "pointer-events-auto"} absolute rounded-md border transition-all duration-150 ${
                 hasCard
                   ? "border-violet-300/60 bg-violet-900/20 hover:border-violet-200 hover:bg-violet-800/20"
                   : "border-violet-200/30 bg-black/10 hover:border-violet-100/55"
@@ -532,6 +554,7 @@ export function BoardStage({
             <button
               key={`player-${slotIndex}`}
               type="button"
+              ref={registerSlotRef("PLAYER", "MONSTER", slotIndex, monster?.instanceId)}
               onClick={(event) => handleSlotClick(event, slotIndex, "PLAYER", "MONSTER")}
               onMouseEnter={(event) => {
                 const anchorRect = toAnchorRect(event.currentTarget.getBoundingClientRect());
@@ -555,7 +578,7 @@ export function BoardStage({
                 onHoverSlot?.(slotIndex, "PLAYER", "MONSTER", null);
                 onHoverMonster?.(null, null);
               }}
-              className={`pointer-events-auto absolute rounded-md border transition-all duration-150 ${
+              className={`${boardInputLocked ? "pointer-events-none" : "pointer-events-auto"} absolute rounded-md border transition-all duration-150 ${
                 hasMonster
                   ? "border-cyan-300/70 bg-cyan-900/20 hover:border-cyan-200 hover:bg-cyan-800/15"
                   : "border-amber-200/25 bg-black/10 hover:border-cyan-200/55"
@@ -615,6 +638,7 @@ export function BoardStage({
             <button
               key={`player-spell-${slotIndex}`}
               type="button"
+              ref={registerSlotRef("PLAYER", "SPELL_TRAP", slotIndex, card?.instanceId)}
               onClick={(event) => handleSlotClick(event, slotIndex, "PLAYER", "SPELL_TRAP")}
               onMouseEnter={(event) => {
                 const anchorRect = toAnchorRect(event.currentTarget.getBoundingClientRect());
@@ -637,7 +661,7 @@ export function BoardStage({
                 onHoverSlot?.(slotIndex, "PLAYER", "SPELL_TRAP", null);
                 onHoverMonster?.(null, null);
               }}
-              className={`pointer-events-auto absolute rounded-md border transition-all duration-150 ${
+              className={`${boardInputLocked ? "pointer-events-none" : "pointer-events-auto"} absolute rounded-md border transition-all duration-150 ${
                 hasCard
                   ? "border-violet-300/65 bg-violet-900/24 hover:border-violet-200 hover:bg-violet-800/20"
                   : "border-violet-200/30 bg-black/10 hover:border-violet-100/55"

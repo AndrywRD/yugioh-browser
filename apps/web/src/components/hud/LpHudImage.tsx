@@ -40,6 +40,7 @@ interface LpHudImageProps {
   opponentLp: number;
   opponentHandCount?: number;
   className?: string;
+  registerRect?: (id: "hud:lp:you" | "hud:lp:opp", element: HTMLDivElement | null) => void;
 }
 
 function clampLp(value: number): number {
@@ -50,7 +51,7 @@ function cx(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-export function LpHudImage({ youLp, opponentLp, opponentHandCount, className }: LpHudImageProps) {
+export function LpHudImage({ youLp, opponentLp, opponentHandCount, className, registerRect }: LpHudImageProps) {
   const [youFlash, setYouFlash] = useState<FlashType>(null);
   const [opponentFlash, setOpponentFlash] = useState<FlashType>(null);
   const [youPulse, setYouPulse] = useState(false);
@@ -121,6 +122,7 @@ export function LpHudImage({ youLp, opponentLp, opponentHandCount, className }: 
         )}
 
         <div
+          ref={(element) => registerRect?.("hud:lp:opp", element)}
           className="absolute"
           style={{
             left: `${OPP_LP_BOX.leftPct}%`,
@@ -146,6 +148,7 @@ export function LpHudImage({ youLp, opponentLp, opponentHandCount, className }: 
         </div>
 
         <div
+          ref={(element) => registerRect?.("hud:lp:you", element)}
           className="absolute"
           style={{
             left: `${YOU_LP_BOX.leftPct}%`,

@@ -209,12 +209,6 @@ export function ShopPanel({
             {rerolling ? "Atualizando..." : `Atualizar ofertas (${shopMeta?.rerollCost ?? 0}g)`}
           </button>
         </div>
-        {shopConfig ? (
-          <p className="mb-2 text-[11px] text-slate-300">
-            Formula reroll: base {shopConfig.reroll.baseCost} + {shopConfig.reroll.stepCost} por uso (max {shopConfig.reroll.maxCost}).
-          </p>
-        ) : null}
-
         <div className="mb-3 grid gap-2 rounded-lg border border-slate-700/80 bg-slate-900/55 p-2">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-amber-100">Pacotes Booster</p>
           <div className="grid gap-2 md:grid-cols-3">
