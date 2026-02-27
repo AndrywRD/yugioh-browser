@@ -217,7 +217,7 @@ export function BoardStage({
   };
 
   return (
-    <div className="relative mx-auto aspect-[16/9] h-auto w-full max-w-[1520px] overflow-hidden rounded-2xl lg:h-full lg:max-h-full">
+    <div className="relative mx-auto aspect-[3/2] h-auto w-full max-w-[min(100%,calc((100dvh-220px)*1.5))] overflow-hidden rounded-2xl">
       <Board />
       <TargetingOverlay mode={targetingMode ?? null} />
 

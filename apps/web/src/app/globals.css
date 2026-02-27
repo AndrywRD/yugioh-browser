@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  --ui-base-font-size: 16px;
+  --ui-base-font-size: 16.5px;
   --ui-font-boost-factor: 1;
   --z-board: 0;
   --z-slots: 10;
@@ -24,27 +24,38 @@ html {
 }
 
 html.ui-scale-compact {
-  --ui-base-font-size: 14px;
+  --ui-base-font-size: 14.5px;
 }
 
 html.ui-scale-normal {
-  --ui-base-font-size: 16px;
+  --ui-base-font-size: 16.5px;
 }
 
 html.ui-scale-large {
-  --ui-base-font-size: 18px;
+  --ui-base-font-size: 18.5px;
 }
 
 html.ui-font-boost {
-  --ui-font-boost-factor: 1.12;
+  --ui-font-boost-factor: 1.08;
 }
 
 body {
   margin: 0;
   background: radial-gradient(circle at top, #1b2735 0%, #090a0f 60%);
-  color: #f8fafc;
+  color: #f8fbff;
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  letter-spacing: 0.02em;
   overflow: hidden;
+}
+
+p,
+span,
+label,
+button,
+input,
+select,
+textarea {
+  letter-spacing: 0.022em;
 }
 
 html.ui-fast-animations *,
@@ -154,7 +165,9 @@ html.ui-colorblind .fm-title {
 }
 
 .fm-subtitle {
-  color: #cbd5e1;
+  color: #e2e8f3;
+  font-size: 1.2em;
+  line-height: 1.35;
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
 }
 
@@ -566,6 +579,8 @@ button {
   box-shadow:
     0 0 16px rgba(56, 189, 248, 0.28),
     0 14px 26px rgba(0, 0, 0, 0.5);
+  will-change: transform, opacity, filter;
+  transform: translate3d(0, 0, 0);
 }
 
 .duel-fx-ghost-image {
@@ -618,10 +633,10 @@ button {
 
 .duel-fx-trail-path {
   fill: none;
-  stroke: rgba(255, 219, 120, 0.95);
-  stroke-width: 4;
+  stroke: rgba(255, 219, 120, 0.88);
+  stroke-width: 5;
   stroke-linecap: round;
-  filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.42));
+  filter: drop-shadow(0 0 10px rgba(251, 191, 36, 0.48));
 }
 
 .duel-fx-rune {
@@ -681,10 +696,18 @@ button {
 
 .duel-fx-beam-path {
   fill: none;
-  stroke: rgba(125, 211, 252, 0.94);
-  stroke-width: 3.2;
+  stroke: rgba(125, 211, 252, 0.72);
+  stroke-width: 4.4;
   stroke-linecap: round;
-  filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.44));
+  filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.46));
+}
+
+.duel-fx-beam-path-core {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 9px rgba(191, 219, 254, 0.58));
 }
 
 .duel-fx-beam-target {
@@ -820,7 +843,7 @@ button {
 }
 
 .lobbyRoot {
-  min-height: 100vh;
+  min-height: 100dvh;
   background: #05070d;
 }
 
@@ -833,6 +856,7 @@ button {
 .lobbyUi {
   position: relative;
   z-index: 10;
+  min-height: 100dvh;
 }
 
 .bgScene {
@@ -868,21 +892,26 @@ button {
 
 .lobbyFrameA {
   position: relative;
-  min-height: calc(100vh - 1rem);
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  overflow: visible;
+  width: 100%;
+  min-height: calc(100dvh - 0.25rem);
+  border: 1px solid rgba(245, 205, 136, 0.2);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(6, 13, 30, 0.7), rgba(2, 7, 20, 0.84)),
+    radial-gradient(circle at 18% 20%, rgba(77, 129, 226, 0.16), transparent 50%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 232, 178, 0.08),
+    0 14px 36px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
 }
 
 .lobbyFrameA::before {
-  content: none;
+  content: "";
   position: absolute;
   inset: 0;
-  background: none;
-  opacity: 0;
-  filter: none;
+  background: linear-gradient(180deg, rgba(255, 225, 155, 0.03), rgba(255, 225, 155, 0));
+  opacity: 1;
+  filter: saturate(1.02);
   pointer-events: none;
 }
 
@@ -900,32 +929,61 @@ button {
 }
 
 .lobbySurface {
-  border: none;
-  background: transparent;
-  border-radius: 0;
-  box-shadow: none;
-  padding: 0;
+  border: 1px solid rgba(245, 205, 136, 0.23);
+  background: linear-gradient(180deg, rgba(9, 19, 45, 0.8), rgba(5, 12, 31, 0.88));
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 231, 186, 0.07),
+    0 8px 20px rgba(0, 0, 0, 0.28);
+  padding: clamp(10px, 1.05vw, 16px);
 }
 
 .lobbySurface--hero {
-  padding: 0;
+  padding: clamp(12px, 1.2vw, 18px);
 }
 
 .lobbySurface--tabs {
-  padding: 0;
+  padding: 8px 10px;
 }
 
 .lobbySurface--sidebar {
-  padding: 0;
+  padding: clamp(10px, 0.95vw, 14px);
+  background: linear-gradient(180deg, rgba(10, 20, 45, 0.83), rgba(6, 12, 30, 0.9));
 }
 
 @media (max-width: 1024px) {
   .lobbyFrameA {
-    min-height: calc(100vh - 0.75rem);
+    min-height: calc(100dvh - 0.25rem);
+    border-radius: 12px;
   }
 
   .lobbySurface--hero {
+    padding: 12px;
+  }
+
+  .lobbySurface {
+    border-radius: 12px;
+  }
+}
+
+@media (max-width: 768px) {
+  .lobbyUi {
+    min-height: auto;
+    padding: 8px;
+  }
+
+  .lobbyFrameA {
+    min-height: auto;
+    border-radius: 10px;
+  }
+
+  .lobbySurface {
     padding: 10px;
+    border-radius: 10px;
+  }
+
+  .lobbySurface--tabs {
+    padding: 8px;
   }
 }
 
@@ -1006,23 +1064,41 @@ button {
 }
 
 .lobby-readable .text-\[10px\] {
-  font-size: 0.76rem;
-  line-height: 1.02rem;
-}
-
-.lobby-readable .text-\[11px\] {
   font-size: 0.82rem;
   line-height: 1.08rem;
 }
 
+.lobby-readable .text-\[11px\] {
+  font-size: 0.9rem;
+  line-height: 1.16rem;
+}
+
 .lobby-readable .text-xs {
-  font-size: 0.86rem;
-  line-height: 1.14rem;
+  font-size: 0.94rem;
+  line-height: 1.24rem;
 }
 
 .lobby-readable .text-sm {
-  font-size: 0.96rem;
-  line-height: 1.3rem;
+  font-size: 1.02rem;
+  line-height: 1.38rem;
+}
+
+.text-slate-300 {
+  color: rgb(216 226 240);
+  font-size: 1.2em;
+  line-height: 1.35;
+}
+
+.text-slate-400 {
+  color: rgb(184 198 216);
+  font-size: 1.2em;
+  line-height: 1.35;
+}
+
+.text-slate-500 {
+  color: rgb(165 180 200);
+  font-size: 1.2em;
+  line-height: 1.35;
 }
 
 @keyframes shopObtainedPop {

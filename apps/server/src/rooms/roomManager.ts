@@ -38,6 +38,15 @@ export class RoomManager {
   private rooms = new Map<string, RuntimeRoom>();
   private playerToRoom = new Map<string, string>();
 
+  listRooms(): RuntimeRoom[] {
+    return Array.from(this.rooms.values()).map((room) => ({
+      ...room,
+      players: room.players.map((player) => ({ ...player })),
+      gameState: room.gameState,
+      pveConfig: room.pveConfig
+    }));
+  }
+
   createRoom(host: { socketId: string; playerId: string; username: string }): RuntimeRoom {
     if (this.playerToRoom.has(host.playerId)) {
       throw new Error("Player already in a room");

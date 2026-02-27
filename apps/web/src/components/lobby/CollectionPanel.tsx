@@ -48,7 +48,7 @@ export function CollectionPanel({ playerLogged, loading, activeDeck, activeDeckT
       </GameCard>
 
       <GameCard title="Acoes de Colecao" subtitle="Atalhos rapidos">
-        <div className="grid gap-2 sm:grid-cols-4">
+        <div className="grid gap-2 sm:grid-cols-5">
           <Link href="/deck-builder" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
             Deck Builder
           </Link>
@@ -60,6 +60,9 @@ export function CollectionPanel({ playerLogged, loading, activeDeck, activeDeckT
           </Link>
           <Link href="/profile" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
             Perfil
+          </Link>
+          <Link href="/achievements" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
+            Conquistas
           </Link>
         </div>
       </GameCard>

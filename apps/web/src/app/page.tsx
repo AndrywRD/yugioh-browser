@@ -5,46 +5,39 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Deck } from "@ruptura-arcana/shared";
 import {
-  claimDailyMissionReward,
   clearStoredPublicId,
   type CollectionEntry,
-  type DailyMission,
   fetchCollection,
   fetchDecks,
   fetchFusionLog,
   fetchProgression,
   fetchPveNpcs,
-  fetchShopOffers,
   getStoredPublicId,
   type LevelProgress,
   loginAccount,
+  fetchSocialSnapshot,
   type PlayerAchievement,
   type DeckListResponse,
   type PlayerProfile,
   type PveNpc,
+  type SocialUser,
   registerAccount,
-  rerollShopOffers,
   setActiveDeckOnServer,
   setStoredPublicId,
-  startPveMatch,
-  type ShopMeta,
-  type ShopOffer
+  startPveMatch
 } from "../lib/api";
-import { CardTraderSummary } from "../components/lobby/CardTraderSummary";
 import { CollectionPanel } from "../components/lobby/CollectionPanel";
 import { ContinueCampaignCard } from "../components/lobby/ContinueCampaignCard";
-import { DailyMissionsCard } from "../components/lobby/DailyMissionsCard";
+import { FriendsPanel } from "../components/lobby/FriendsPanel";
 import { GameCard } from "../components/lobby/GameCard";
-import { JoinCodeModal } from "../components/lobby/JoinCodeModal";
 import { LobbyHeader } from "../components/lobby/LobbyHeader";
 import { LobbyTicker, type LobbyTickerMessage } from "../components/lobby/LobbyTicker";
 import { LobbyTabs } from "../components/lobby/LobbyTabs";
 import { OnlinePanel } from "../components/lobby/OnlinePanel";
 import { ProfileDeckCard } from "../components/lobby/ProfileDeckCard";
 import { ProfilePanel } from "../components/lobby/ProfilePanel";
-import { ProgressCard } from "../components/lobby/ProgressCard";
+import { RankingPanel } from "../components/lobby/RankingPanel";
 import { TabsAnimatedPanel } from "../components/lobby/TabsAnimatedPanel";
-import { TutorialCard } from "../components/lobby/TutorialCard";
 import type { LobbySection } from "../components/lobby/types";
 import {
   applyUiPreferences,
@@ -53,17 +46,10 @@ import {
   saveUiPreferences,
   type UiPreferences
 } from "../lib/uiPreferences";
-import {
-  buildTutorialMatchUrl,
-  loadTutorialProgress,
-  resetTutorialProgress,
-  TUTORIAL_LESSONS,
-  type TutorialLessonId,
-  type TutorialProgress
-} from "../lib/tutorial";
+import { loadScreenModule } from "../lib/lazyScreens";
 
-const LAST_ROOM_CODE_STORAGE_KEY = "ruptura_arcana_last_room_code";
 const LOBBY_NOTICES_STORAGE_KEY = "ruptura_arcana_lobby_notices";
+const LOBBY_AVATAR_STORAGE_PREFIX = "ruptura_arcana_avatar_";
 
 function deckTotal(deck: Deck): number {
   return deck.cards.reduce((acc, entry) => acc + entry.count, 0);
@@ -75,6 +61,7 @@ export default function LobbyPage() {
   const [error, setError] = useState("");
   const [section, setSection] = useState<LobbySection>("CAMPAIGN");
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(getDefaultUiPreferences());
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
 
   const [authBusy, setAuthBusy] = useState(false);
   const [authMode, setAuthMode] = useState<"LOGIN" | "REGISTER">("LOGIN");
@@ -88,34 +75,19 @@ export default function LobbyPage() {
   const [collectionEntries, setCollectionEntries] = useState<CollectionEntry[]>([]);
   const [levelProgress, setLevelProgress] = useState<LevelProgress | null>(null);
   const [achievements, setAchievements] = useState<PlayerAchievement[]>([]);
-  const [availableAchievements, setAvailableAchievements] = useState(0);
-  const [dailyMissions, setDailyMissions] = useState<DailyMission[]>([]);
-  const [claimingMissionKey, setClaimingMissionKey] = useState<string | null>(null);
-  const [shopOffers, setShopOffers] = useState<ShopOffer[]>([]);
-  const [shopMeta, setShopMeta] = useState<ShopMeta | null>(null);
-  const [shopLoading, setShopLoading] = useState(false);
-  const [rerollingShop, setRerollingShop] = useState(false);
   const [collectionCount, setCollectionCount] = useState(0);
   const [fusionCount, setFusionCount] = useState(0);
-  const [tutorialProgress, setTutorialProgress] = useState<TutorialProgress | null>(null);
-  const [tutorialBusy, setTutorialBusy] = useState(false);
   const [busyNpcId, setBusyNpcId] = useState<string | null>(null);
+  const [friendsBadgeCount, setFriendsBadgeCount] = useState(0);
 
-  const [creatingRoom, setCreatingRoom] = useState(false);
-  const [joinModalOpen, setJoinModalOpen] = useState(false);
-  const [joinCode, setJoinCode] = useState("");
-  const [joinBusy, setJoinBusy] = useState(false);
-  const [joinError, setJoinError] = useState("");
-  const [lastRoomCode, setLastRoomCode] = useState<string | null>(null);
   const [tickerMessages, setTickerMessages] = useState<LobbyTickerMessage[]>([]);
+  const [navigatingTo, setNavigatingTo] = useState<string | null>(null);
 
   const activeDeck = useMemo(() => {
     return decks.decks.find((deck) => deck.id === decks.activeDeckId) ?? null;
   }, [decks.activeDeckId, decks.decks]);
 
   const activeDeckTotal = useMemo(() => (activeDeck ? deckTotal(activeDeck) : 0), [activeDeck]);
-  const activeDeckValid = useMemo(() => Boolean(activeDeck && activeDeckTotal === 40), [activeDeck, activeDeckTotal]);
-  const hasCampaignProgress = Boolean(player && player.winsPve > 0);
 
   const removeTicker = useCallback((id: string) => {
     setTickerMessages((current) => current.filter((message) => message.id !== id));
@@ -135,22 +107,15 @@ export default function LobbyPage() {
       player: PlayerProfile;
       levelProgress: LevelProgress;
       achievements: PlayerAchievement[];
-      availableAchievements: number;
-      dailyMissions: DailyMission[];
     },
-    options?: { announceLevelUp?: boolean; previousLevel?: number; announceMissionClaim?: boolean }
+    options?: { announceLevelUp?: boolean; previousLevel?: number }
   ) => {
     setPlayer(payload.player);
     setLevelProgress(payload.levelProgress);
     setAchievements(payload.achievements);
-    setAvailableAchievements(payload.availableAchievements);
-    setDailyMissions(payload.dailyMissions);
 
     if (options?.announceLevelUp && typeof options.previousLevel === "number" && payload.player.level > options.previousLevel) {
       pushTicker(`Level UP! ${options.previousLevel} -> ${payload.player.level}`, "success");
-    }
-    if (options?.announceMissionClaim) {
-      pushTicker("Missao diaria resgatada com sucesso.", "success");
     }
   };
 
@@ -158,76 +123,45 @@ export default function LobbyPage() {
     setPlayer(null);
     setLevelProgress(null);
     setAchievements([]);
-    setAvailableAchievements(0);
-    setDailyMissions([]);
-    setClaimingMissionKey(null);
     setDecks({ decks: [], activeDeckId: null });
     setNpcs([]);
     setCollectionEntries([]);
-    setShopOffers([]);
-    setShopMeta(null);
     setCollectionCount(0);
     setFusionCount(0);
     setBusyNpcId(null);
+    setFriendsBadgeCount(0);
   };
 
-  const refreshLobbyData = async (publicId: string) => {
+  const refreshSocialBadge = async (publicId: string): Promise<void> => {
     try {
-      setShopLoading(true);
-      const [progression, deckPayload, npcPayload, collection, fusionLog, shop] = await Promise.all([
-        fetchProgression(publicId),
-        fetchDecks(publicId),
-        fetchPveNpcs(publicId),
-        fetchCollection(publicId).catch(() => []),
-        fetchFusionLog(publicId).catch(() => []),
-        fetchShopOffers(publicId, 20).catch(() => ({
-          offers: [],
-          meta: {
-            rotationKey: "fallback",
-            nextRotationAt: Date.now() + 24 * 60 * 60 * 1000,
-            rerollUsed: 0,
-            rerollLimit: 0,
-            rerollCost: 0
-          } satisfies ShopMeta
-        }))
-      ]);
-
-      applyProgressionState({
-        player: progression.player,
-        levelProgress: progression.levelProgress,
-        achievements: progression.achievements,
-        availableAchievements: progression.availableAchievements,
-        dailyMissions: progression.dailyMissions
-      });
-
-      setDecks(deckPayload);
-      setNpcs(npcPayload);
-      setCollectionEntries(collection);
-      setShopOffers(shop.offers);
-      setShopMeta(shop.meta ?? null);
-      setCollectionCount(collection.reduce((acc, entry) => acc + entry.count, 0));
-      setFusionCount(fusionLog.length);
-    } finally {
-      setShopLoading(false);
+      const socialSnapshot = await fetchSocialSnapshot(publicId);
+      setFriendsBadgeCount(socialSnapshot.badgeCount);
+    } catch {
+      setFriendsBadgeCount(0);
     }
   };
 
-  const refreshProgressionOnly = async (
-    publicId: string,
-    options?: { announceLevelUp?: boolean; previousLevel?: number; announceMissionClaim?: boolean }
-  ) => {
-    const progression = await fetchProgression(publicId);
-    applyProgressionState(
-      {
-        player: progression.player,
-        levelProgress: progression.levelProgress,
-        achievements: progression.achievements,
-        availableAchievements: progression.availableAchievements,
-        dailyMissions: progression.dailyMissions
-      },
-      options
-    );
-    return progression;
+  const refreshLobbyData = async (publicId: string) => {
+    const [progression, deckPayload, npcPayload, collection, fusionLog] = await Promise.all([
+      fetchProgression(publicId),
+      fetchDecks(publicId),
+      fetchPveNpcs(publicId),
+      fetchCollection(publicId).catch(() => []),
+      fetchFusionLog(publicId).catch(() => [])
+    ]);
+
+    applyProgressionState({
+      player: progression.player,
+      levelProgress: progression.levelProgress,
+      achievements: progression.achievements
+    });
+
+    setDecks(deckPayload);
+    setNpcs(npcPayload);
+    setCollectionEntries(collection);
+    setCollectionCount(collection.reduce((acc, entry) => acc + entry.count, 0));
+    setFusionCount(fusionLog.length);
+    await refreshSocialBadge(publicId);
   };
 
   useEffect(() => {
@@ -237,25 +171,12 @@ export default function LobbyPage() {
   }, []);
 
   useEffect(() => {
-    const syncTutorial = () => {
-      setTutorialProgress(loadTutorialProgress());
-      setTutorialBusy(false);
-    };
-
-    syncTutorial();
-    window.addEventListener("focus", syncTutorial);
-    return () => window.removeEventListener("focus", syncTutorial);
-  }, []);
-
-  useEffect(() => {
     const boot = async () => {
       try {
         setLoading(true);
         setError("");
 
         if (typeof window !== "undefined") {
-          const storedCode = window.localStorage.getItem(LAST_ROOM_CODE_STORAGE_KEY);
-          if (storedCode) setLastRoomCode(storedCode);
           const rawNotices = window.localStorage.getItem(LOBBY_NOTICES_STORAGE_KEY);
           if (rawNotices) {
             try {
@@ -288,6 +209,24 @@ export default function LobbyPage() {
 
     void boot();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!player?.publicId) {
+      setProfileAvatarUrl(null);
+      return;
+    }
+    setProfileAvatarUrl(window.localStorage.getItem(`${LOBBY_AVATAR_STORAGE_PREFIX}${player.publicId}`));
+  }, [player?.publicId]);
+
+  useEffect(() => {
+    if (!player?.publicId || !player.username) return;
+    void refreshSocialBadge(player.publicId);
+    const interval = window.setInterval(() => {
+      void refreshSocialBadge(player.publicId);
+    }, 30000);
+    return () => window.clearInterval(interval);
+  }, [player?.publicId, player?.username]);
 
   const handleLogin = async () => {
     try {
@@ -335,10 +274,6 @@ export default function LobbyPage() {
     resetLobbyState();
     setError("");
     setPasswordField("");
-    setJoinModalOpen(false);
-    setJoinCode("");
-    setJoinError("");
-    setRerollingShop(false);
     setSection("CAMPAIGN");
   };
 
@@ -367,115 +302,17 @@ export default function LobbyPage() {
     }
   };
 
-  const handleRerollShop = async () => {
+  const handleChallengeFriend = (friend: SocialUser) => {
     if (!player) {
       setSection("PROFILE");
       return;
     }
-    if (shopMeta && shopMeta.rerollUsed >= shopMeta.rerollLimit) {
-      const message = "Limite diario de reroll atingido.";
-      setError(message);
-      pushTicker(message, "warning");
-      return;
-    }
-    if (shopMeta && player.gold < shopMeta.rerollCost) {
-      const message = "Gold insuficiente para atualizar ofertas.";
-      setError(message);
-      pushTicker(message, "warning");
-      return;
-    }
-
-    try {
-      setRerollingShop(true);
-      setError("");
-      const result = await rerollShopOffers(player.publicId, 20);
-      setPlayer(result.player);
-      setShopOffers(result.shop.offers);
-      setShopMeta(result.shop.meta);
-      pushTicker(`Loja atualizada. Proximo reroll: ${result.shop.meta.rerollCost}g.`, "success");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Falha ao atualizar ofertas da loja.";
-      setError(message);
-      pushTicker(message, "warning");
-    } finally {
-      setRerollingShop(false);
-    }
-  };
-
-  const handleClaimDailyMission = async (missionKey: string) => {
-    if (!player) {
-      setSection("PROFILE");
-      return;
-    }
-
-    try {
-      setClaimingMissionKey(missionKey);
-      setError("");
-      const previousLevel = player.level;
-      const progression = await claimDailyMissionReward(player.publicId, missionKey);
-      applyProgressionState(
-        {
-          player: progression.player,
-          levelProgress: progression.levelProgress,
-          achievements: progression.achievements,
-          availableAchievements: progression.availableAchievements,
-          dailyMissions: progression.dailyMissions
-        },
-        { announceMissionClaim: true, announceLevelUp: true, previousLevel }
+    setNavigatingTo(`Preparando duelo PvP contra ${friend.username}...`);
+    window.setTimeout(() => {
+      router.push(
+        `/match?username=${encodeURIComponent(player.username)}&mode=PVP&autoCreate=1&friend=${encodeURIComponent(friend.username)}`
       );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Falha ao resgatar missao.";
-      setError(message);
-      pushTicker(message, "warning");
-    } finally {
-      setClaimingMissionKey(null);
-    }
-  };
-
-  const handleStartTutorialLesson = (lessonId: TutorialLessonId) => {
-    if (!player) {
-      setSection("PROFILE");
-      return;
-    }
-
-    setTutorialBusy(true);
-    setError("");
-    const tutorialUrl = buildTutorialMatchUrl({
-      lessonId,
-      username: player.username
-    });
-    router.push(tutorialUrl);
-  };
-
-  const handleResetTutorial = () => {
-    const updated = resetTutorialProgress();
-    setTutorialProgress(updated);
-    pushTicker("Tutorial resetado. Voce pode recomecar da licao 1.", "info");
-  };
-
-  const handlePrimaryAction = () => {
-    if (!player) {
-      setSection("PROFILE");
-      return;
-    }
-    setSection("CAMPAIGN");
-    router.push("/pve");
-  };
-
-  const handleSecondaryAction = () => {
-    if (!player) {
-      setSection("PROFILE");
-      return;
-    }
-    setSection("ONLINE");
-  };
-
-  const handleOpenShop = () => {
-    if (!player) {
-      setSection("PROFILE");
-      return;
-    }
-    router.push("/shop");
+    }, 80);
   };
 
   const handleOpenNpcSelection = () => {
@@ -483,15 +320,11 @@ export default function LobbyPage() {
       setSection("PROFILE");
       return;
     }
-    router.push("/pve");
-  };
-
-  const handleOpenDeckBuilder = () => {
-    if (!player) {
-      setSection("PROFILE");
-      return;
-    }
-    router.push("/deck-builder");
+    void loadScreenModule("DUEL");
+    setNavigatingTo("Abrindo selecao de NPC...");
+    window.setTimeout(() => {
+      router.push("/pve");
+    }, 80);
   };
 
   const handleStartNpcDuel = async (npcId: string) => {
@@ -503,8 +336,12 @@ export default function LobbyPage() {
     try {
       setBusyNpcId(npcId);
       setError("");
+      void loadScreenModule("DUEL");
       const start = await startPveMatch(player.publicId, npcId);
-      router.push(`/match?roomCode=${start.roomCode}&username=${encodeURIComponent(player.username)}&mode=PVE`);
+      setNavigatingTo("Preparando duelo PvE...");
+      window.setTimeout(() => {
+        router.push(`/match?roomCode=${start.roomCode}&username=${encodeURIComponent(player.username)}&mode=PVE`);
+      }, 80);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Nao foi possivel iniciar o duelo PVE.";
       setError(message);
@@ -514,57 +351,15 @@ export default function LobbyPage() {
     }
   };
 
-  const handleCreateRoom = () => {
-    if (!player) {
-      setSection("PROFILE");
+  useEffect(() => {
+    if (section === "FRIENDS") {
+      void loadScreenModule("FRIENDS");
       return;
     }
-    setCreatingRoom(true);
-    pushTicker("Criando sala PvP...", "info");
-    router.push(`/match?username=${encodeURIComponent(player.username)}&mode=PVP&autoCreate=1`);
-  };
-
-  const handleOpenJoinModal = () => {
-    if (!player) {
-      setSection("PROFILE");
-      return;
+    if (section === "RANKING") {
+      void loadScreenModule("RANKING");
     }
-    setJoinError("");
-    setJoinCode("");
-    setJoinModalOpen(true);
-  };
-
-  const handleJoinSubmit = () => {
-    if (!player) {
-      setSection("PROFILE");
-      return;
-    }
-
-    const normalizedCode = joinCode.trim().toUpperCase();
-    if (!normalizedCode) {
-      setJoinError("Informe um codigo de sala.");
-      return;
-    }
-
-    setJoinBusy(true);
-    setJoinError("");
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(LAST_ROOM_CODE_STORAGE_KEY, normalizedCode);
-    }
-    setLastRoomCode(normalizedCode);
-    pushTicker(`Entrando na sala ${normalizedCode}...`, "info");
-    router.push(`/match?roomCode=${normalizedCode}&username=${encodeURIComponent(player.username)}&mode=PVP`);
-  };
-
-  const handleCopyLastRoomCode = async () => {
-    if (!lastRoomCode) return;
-    try {
-      await navigator.clipboard.writeText(lastRoomCode);
-      pushTicker("Codigo de sala copiado.", "success");
-    } catch {
-      setError("Nao foi possivel copiar o codigo da sala.");
-    }
-  };
+  }, [section]);
 
   const inputClass =
     "rounded-lg border border-slate-700/90 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60";
@@ -645,47 +440,15 @@ export default function LobbyPage() {
             levelProgress={levelProgress}
             npcs={npcs}
             busyNpcId={busyNpcId}
-            onContinueCampaign={handlePrimaryAction}
             onOpenNpcSelection={handleOpenNpcSelection}
-            onOpenDeckBuilder={handleOpenDeckBuilder}
             onQuickDuel={(npcId) => void handleStartNpcDuel(npcId)}
-          />
-          <TutorialCard
-            loading={loading}
-            playerLogged={Boolean(player)}
-            progress={tutorialProgress}
-            lessons={TUTORIAL_LESSONS}
-            busy={tutorialBusy}
-            onStartLesson={(lessonId) => handleStartTutorialLesson(lessonId)}
-            onReset={handleResetTutorial}
-          />
-          <CardTraderSummary
-            loading={loading || shopLoading}
-            playerLogged={Boolean(player)}
-            gold={player.gold}
-            offers={shopOffers}
-            shopMeta={shopMeta}
-            rerolling={rerollingShop}
-            canReroll={Boolean(shopMeta) && Boolean(player) && player.gold >= (shopMeta?.rerollCost ?? Number.POSITIVE_INFINITY) && (shopMeta?.rerollUsed ?? 0) < (shopMeta?.rerollLimit ?? 0)}
-            onOpenShop={handleOpenShop}
-            onReroll={() => void handleRerollShop()}
           />
         </div>
       );
     }
 
     if (section === "ONLINE") {
-      return (
-        <OnlinePanel
-          playerLogged={Boolean(player)}
-          loading={loading}
-          creatingRoom={creatingRoom}
-          lastRoomCode={lastRoomCode}
-          onCreateRoom={handleCreateRoom}
-          onOpenJoinModal={handleOpenJoinModal}
-          onCopyCode={handleCopyLastRoomCode}
-        />
-      );
+      return <OnlinePanel playerLogged={Boolean(player)} />;
     }
 
     if (section === "COLLECTION") {
@@ -701,13 +464,35 @@ export default function LobbyPage() {
       );
     }
 
+    if (section === "FRIENDS") {
+      return (
+        <FriendsPanel
+          playerLogged={Boolean(player)}
+          currentUserId={player?.publicId ?? null}
+          currentUsername={player?.username ?? null}
+          onBadgeCountChange={setFriendsBadgeCount}
+          onChallengeFriend={handleChallengeFriend}
+        />
+      );
+    }
+
+    if (section === "RANKING") {
+      return (
+        <RankingPanel
+          playerLogged={Boolean(player)}
+          currentUserId={player?.publicId ?? null}
+          currentUsername={player?.username ?? null}
+          currentWinsPvp={player?.winsPvp ?? 0}
+          currentLevel={player?.level ?? 1}
+        />
+      );
+    }
+
     return (
       <ProfilePanel
         player={player}
         loading={loading}
         decks={decks}
-        activeDeck={activeDeck}
-        activeDeckTotal={activeDeckTotal}
         levelProgress={levelProgress}
         achievements={achievements}
         onSetActiveDeck={(deckId) => void handleSetActiveDeck(deckId)}
@@ -727,16 +512,14 @@ export default function LobbyPage() {
         <div className="bgNoise" />
       </div>
 
-      <div className="lobbyUi mx-auto w-full max-w-[1920px] p-2 sm:p-3 lg:p-4">
-        <section className="lobbyFrameA mx-auto w-full max-w-[1760px]">
-          <div className="space-y-4 px-4 py-4 sm:px-5 sm:py-5 lg:space-y-5 lg:px-7 lg:py-6">
+      <div className="lobbyUi w-full min-h-[100dvh] p-1 sm:p-2 lg:p-3 xl:p-4">
+        <section className="lobbyFrameA w-full min-h-[calc(100dvh-0.25rem)]">
+          <div className="space-y-3 px-3 py-3 sm:px-4 sm:py-4 lg:space-y-4 lg:px-5 lg:py-5 xl:px-6 xl:py-6">
             <section className="lobbySurface lobbySurface--hero">
               <LobbyHeader
                 player={player}
+                levelProgress={levelProgress}
                 loading={loading}
-                hasCampaignProgress={hasCampaignProgress}
-                onPrimaryAction={handlePrimaryAction}
-                onSecondaryAction={handleSecondaryAction}
                 onAuthAction={() => setSection("PROFILE")}
               />
             </section>
@@ -750,70 +533,53 @@ export default function LobbyPage() {
             ) : null}
 
             <section className="lobbySurface lobbySurface--tabs">
-              <LobbyTabs active={section} onChange={setSection} disabled={false} />
+              <LobbyTabs
+                active={section}
+                onChange={setSection}
+                disabled={false}
+                badges={{ FRIENDS: friendsBadgeCount }}
+                profileAvatarUrl={profileAvatarUrl}
+              />
             </section>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.85fr)_minmax(320px,1fr)]">
+            <div
+              className={`grid gap-3 ${
+                section === "PROFILE"
+                  ? ""
+                  : "lg:grid-cols-[minmax(0,1.9fr)_minmax(320px,0.95fr)] xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]"
+              }`}
+            >
               <section className="lobbySurface min-w-0">
                 <TabsAnimatedPanel active={section}>{renderActiveSection()}</TabsAnimatedPanel>
               </section>
 
-              <aside className="space-y-3">
-                {section !== "PROFILE" && (
+              {section !== "PROFILE" ? (
+                <aside className="space-y-3 lg:sticky lg:top-2 lg:self-start">
                   <section className="lobbySurface lobbySurface--sidebar">
                     <ProfileDeckCard
                       loading={loading}
                       player={player}
+                      levelProgress={levelProgress}
                       decks={decks}
-                      activeDeck={activeDeck}
-                      activeDeckTotal={activeDeckTotal}
-                      activeDeckValid={activeDeckValid}
                       onSetActiveDeck={(deckId) => void handleSetActiveDeck(deckId)}
                       onLogout={handleLogout}
                     />
                   </section>
-                )}
-                <section className="lobbySurface lobbySurface--sidebar">
-                  <DailyMissionsCard
-                    loading={loading}
-                    playerLogged={Boolean(player)}
-                    missions={dailyMissions}
-                    claimingMissionKey={claimingMissionKey}
-                    onClaim={(missionKey) => void handleClaimDailyMission(missionKey)}
-                  />
-                </section>
-                <section className="lobbySurface lobbySurface--sidebar">
-                  <ProgressCard
-                    loading={loading}
-                    player={player}
-                    npcs={npcs}
-                    fusionCount={fusionCount}
-                    levelProgress={levelProgress}
-                    achievementsUnlocked={achievements.length}
-                    availableAchievements={availableAchievements}
-                    dailyMissionCompleted={dailyMissions.filter((mission) => mission.claimed).length}
-                  />
-                </section>
-              </aside>
+                </aside>
+              ) : null}
             </div>
           </div>
         </section>
       </div>
 
-      <JoinCodeModal
-        open={joinModalOpen}
-        code={joinCode}
-        busy={joinBusy}
-        error={joinError}
-        onCodeChange={setJoinCode}
-        onClose={() => {
-          if (joinBusy) return;
-          setJoinModalOpen(false);
-          setJoinBusy(false);
-          setJoinError("");
-        }}
-        onSubmit={handleJoinSubmit}
-      />
+      {navigatingTo ? (
+        <div className="fixed inset-0 z-[160] flex items-center justify-center bg-slate-950/78 backdrop-blur-[2px]">
+          <div className="rounded-xl border border-amber-300/50 bg-slate-900/92 px-6 py-5 text-center shadow-[0_20px_55px_rgba(0,0,0,0.55)]">
+            <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-amber-200/30 border-t-amber-200" />
+            <p className="text-sm font-semibold text-amber-100">{navigatingTo}</p>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -24,6 +24,8 @@ const FALLBACK_PACK_META: Array<{ type: BoosterPackType; label: string; cost: nu
   { type: "ADVANCED", label: "Booster Avancado", cost: 1420, cards: 5 }
 ];
 
+type ShopCategory = "PACOTES" | "ESTRUTURAIS" | "ACESSORIOS";
+
 function segmentClasses(segment: ShopOffer["segment"]): string {
   if (segment === "AVANCADO") return "border-fuchsia-300/60 bg-fuchsia-900/30 text-fuchsia-100";
   if (segment === "INTERMEDIARIO") return "border-cyan-300/60 bg-cyan-900/30 text-cyan-100";
@@ -99,6 +101,7 @@ export function ShopPanel({
   openingBoosterType,
   onOpenBooster
 }: ShopPanelProps) {
+  const [activeCategory, setActiveCategory] = useState<ShopCategory>("PACOTES");
   const [offerToConfirm, setOfferToConfirm] = useState<ShopOffer | null>(null);
   const [kindFilter, setKindFilter] = useState<"ALL" | "MONSTER" | "SPELL" | "TRAP">("ALL");
   const [atkMin, setAtkMin] = useState(0);
@@ -187,9 +190,25 @@ export function ShopPanel({
     <div className="grid gap-3">
       <GameCard
         title="Loja Arcana"
-        subtitle="Ofertas dinamicas com preco por tier, raridade e demanda global da comunidade."
         rightSlot={<span className="rounded border border-amber-300/60 bg-amber-900/35 px-2 py-0.5 text-[11px] font-semibold text-amber-100">Gold: {gold}</span>}
       >
+        <div className="mb-3 flex flex-wrap gap-2">
+          {(["PACOTES", "ESTRUTURAIS", "ACESSORIOS"] as const).map((category) => (
+            <button
+              key={category}
+              type="button"
+              onClick={() => setActiveCategory(category)}
+              className={`rounded-md border px-3 py-1 text-xs font-semibold transition ${
+                activeCategory === category
+                  ? "border-amber-200/85 bg-slate-900/80 text-amber-100"
+                  : "border-slate-600/70 bg-slate-900/45 text-slate-300 hover:border-amber-200/50 hover:text-amber-100"
+              }`}
+            >
+              {category === "PACOTES" ? "Pacotes" : category === "ESTRUTURAIS" ? "Cartas Unitarias" : "Acessorios (em breve)"}
+            </button>
+          ))}
+        </div>
+
         <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded border border-slate-600/80 bg-slate-900/65 px-2 py-1 text-[11px] text-slate-300">
             Ofertas: <span className="font-semibold text-slate-100">{offers.length}</span>
@@ -209,171 +228,238 @@ export function ShopPanel({
             {rerolling ? "Atualizando..." : `Atualizar ofertas (${shopMeta?.rerollCost ?? 0}g)`}
           </button>
         </div>
-        <div className="mb-3 grid gap-2 rounded-lg border border-slate-700/80 bg-slate-900/55 p-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-amber-100">Pacotes Booster</p>
-          <div className="grid gap-2 md:grid-cols-3">
-            {packConfigs.map((pack) => {
-              const packType = pack.type;
-              return (
-                <button
-                  key={packType}
-                  type="button"
-                  onClick={() => void handleOpenBooster(packType)}
-                  disabled={loading || Boolean(buyingCardId) || Boolean(openingBoosterType) || gold < pack.cost}
-                  className="fm-button rounded-lg border border-slate-600/80 bg-slate-900/60 px-2 py-2 text-left disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  <p className="text-xs font-semibold text-slate-100">{pack.label}</p>
-                  <p className="text-[11px] text-slate-300">{pack.cards} cartas</p>
-                  <p className="text-[11px] font-semibold text-emerald-200">{openingBoosterType === packType ? "Abrindo..." : `${pack.cost} gold`}</p>
-                </button>
-              );
-            })}
-          </div>
-        </div>
 
-        <div className="mb-3 grid gap-2 rounded-lg border border-slate-700/80 bg-slate-900/55 p-2 md:grid-cols-2 xl:grid-cols-6">
-          <label className="text-[11px] text-slate-300">
-            Tipo
-            <select
-              value={kindFilter}
-              onChange={(event) => setKindFilter(event.target.value as "ALL" | "MONSTER" | "SPELL" | "TRAP")}
-              className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
-            >
-              <option value="ALL">Todos</option>
-              <option value="MONSTER">Monster</option>
-              <option value="SPELL">Spell</option>
-              <option value="TRAP">Trap</option>
-            </select>
-          </label>
-
-          <label className="text-[11px] text-slate-300">
-            ATK min
-            <input
-              type="number"
-              min={0}
-              max={5000}
-              value={atkMin}
-              onChange={(event) => setAtkMin(Number(event.target.value) || 0)}
-              className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
-            />
-          </label>
-
-          <label className="text-[11px] text-slate-300">
-            ATK max
-            <input
-              type="number"
-              min={0}
-              max={5000}
-              value={atkMax}
-              onChange={(event) => setAtkMax(Number(event.target.value) || 0)}
-              className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
-            />
-          </label>
-
-          <label className="text-[11px] text-slate-300">
-            DEF min
-            <input
-              type="number"
-              min={0}
-              max={5000}
-              value={defMin}
-              onChange={(event) => setDefMin(Number(event.target.value) || 0)}
-              className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
-            />
-          </label>
-
-          <label className="text-[11px] text-slate-300">
-            DEF max
-            <input
-              type="number"
-              min={0}
-              max={5000}
-              value={defMax}
-              onChange={(event) => setDefMax(Number(event.target.value) || 0)}
-              className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
-            />
-          </label>
-
-          <label className="flex items-end gap-2 pb-1 text-[11px] text-slate-300">
-            <input
-              type="checkbox"
-              checked={onlyUnowned}
-              onChange={(event) => setOnlyUnowned(event.target.checked)}
-              className="h-3.5 w-3.5 rounded border-slate-500/80 bg-slate-950"
-            />
-            Somente nao possuo
-          </label>
-        </div>
-
-        {loading ? (
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, index) => (
-              <SkeletonCard key={`shop-skeleton-${index}`} className="h-[132px]" />
-            ))}
-          </div>
-        ) : filteredOffers.length === 0 ? (
-          <div className="rounded-lg border border-slate-700/80 bg-slate-900/55 px-3 py-4 text-center text-sm text-slate-300">
-            Nenhuma oferta encontrada com os filtros atuais.
-          </div>
-        ) : (
-          <div className="fm-scroll max-h-[68vh] overflow-y-auto pr-1">
-            <div className="mb-2 text-xs text-slate-300">Mostrando {filteredOffers.length} / {offers.length} ofertas.</div>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              {filteredOffers.map((offer) => (
-                <article key={offer.cardId} className="lobby-motion-card flex gap-2 rounded-lg border border-slate-700/80 bg-slate-900/65 p-2.5">
-                  <div className="h-[90px] w-[64px] shrink-0 overflow-hidden rounded border border-slate-600/75 bg-slate-900">
-                    {offer.imagePath ? (
-                      <img src={offer.imagePath} alt={offer.name} className="h-full w-full object-cover" loading="lazy" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">No Art</div>
-                    )}
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-slate-100">{offer.name}</p>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${segmentClasses(offer.segment)}`}>{offer.segment}</span>
-                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${rarityClasses(offer.rarity)}`}>{offer.rarity}</span>
-                      <span className="rounded border border-amber-200/45 bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-100">{offer.kind}</span>
-                    </div>
-
-                    {offer.kind === "MONSTER" ? (
-                      <p className="mt-1 text-xs text-slate-200">
-                        ATK <span className="font-semibold text-amber-100">{offer.atk ?? 0}</span> / DEF{" "}
-                        <span className="font-semibold text-cyan-100">{offer.def ?? 0}</span>
-                      </p>
-                    ) : (
-                      <p className="mt-1 max-h-[32px] overflow-hidden text-[11px] leading-snug text-slate-300">{offer.effectDescription ?? "Sem efeito descritivo."}</p>
-                    )}
-
-                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                      <span className="rounded border border-emerald-300/45 bg-emerald-900/35 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-100">Preco: {offer.price}</span>
-                      <span
-                        className={`rounded border px-1.5 py-0.5 text-[10px] ${
-                          offer.affordable ? "border-cyan-300/45 bg-cyan-900/35 text-cyan-100" : "border-rose-300/45 bg-rose-900/35 text-rose-100"
-                        }`}
-                      >
-                        {offer.affordable ? "Compravel agora" : "Gold insuficiente"}
+        {activeCategory === "PACOTES" ? (
+          <div className="space-y-3">
+            <div className="grid gap-2 rounded-lg border border-slate-700/80 bg-slate-900/55 p-2 md:grid-cols-3">
+              {packConfigs.map((pack) => {
+                const packType = pack.type;
+                return (
+                  <article key={packType} className="lobby-motion-card rounded-lg border border-slate-700/80 bg-slate-900/65 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-xl" aria-hidden>
+                        🎴
                       </span>
-                      {offer.owned > 0 ? (
-                        <span className="rounded border border-slate-500/60 bg-slate-800/75 px-1.5 py-0.5 text-[10px] text-slate-200">Colecao x{offer.owned}</span>
-                      ) : null}
+                      <span className="rounded border border-amber-300/55 bg-amber-900/35 px-2 py-0.5 text-[10px] font-semibold text-amber-100">
+                        {pack.cards} cartas
+                      </span>
                     </div>
-
+                    <p className="text-sm font-semibold text-slate-100">{pack.label}</p>
+                    <p className="mt-1 text-xs text-slate-300">Pacote tematico com progressao balanceada.</p>
+                    <p className="mt-2 text-sm font-semibold text-emerald-200">{pack.cost} gold</p>
                     <button
                       type="button"
-                      onClick={() => setOfferToConfirm(offer)}
-                      disabled={Boolean(buyingCardId) || gold < offer.price}
-                      className="fm-button mt-2 w-full rounded px-2 py-1 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                      onClick={() => void handleOpenBooster(packType)}
+                      disabled={loading || Boolean(buyingCardId) || Boolean(openingBoosterType) || gold < pack.cost}
+                      className="fm-button mt-2 w-full rounded px-2 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45"
                     >
-                      {buyingCardId === offer.cardId ? "Comprando..." : gold >= offer.price ? "Comprar" : "Sem gold"}
+                      {openingBoosterType === packType ? "Abrindo..." : "Comprar pacote"}
                     </button>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                );
+              })}
+            </div>
+
+            <div className="rounded-lg border border-slate-700/80 bg-slate-900/55 p-2">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-300">Destaques rotativos</p>
+              {loading ? (
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {Array.from({ length: 3 }).map((_, index) => (
+                    <SkeletonCard key={`shop-highlight-skeleton-${index}`} className="h-[132px]" />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {filteredOffers.slice(0, 6).map((offer) => (
+                    <article key={offer.cardId} className="rounded-lg border border-slate-700/80 bg-slate-900/65 p-2">
+                      <div className="flex gap-2">
+                        <div className="h-[74px] w-[54px] shrink-0 overflow-hidden rounded border border-slate-600/75 bg-slate-900">
+                          {offer.imagePath ? (
+                            <img src={offer.imagePath} alt={offer.name} className="h-full w-full object-cover" loading="lazy" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">No Art</div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-slate-100">{offer.name}</p>
+                          <p className="mt-1 text-[11px] text-slate-300">
+                            {offer.kind === "MONSTER" ? `ATK ${offer.atk ?? 0} / DEF ${offer.def ?? 0}` : offer.effectDescription ?? "Sem efeito."}
+                          </p>
+                          <div className="mt-2 flex items-center justify-between">
+                            <span className="rounded border border-emerald-300/45 bg-emerald-900/35 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-100">{offer.price}g</span>
+                            <button
+                              type="button"
+                              onClick={() => setOfferToConfirm(offer)}
+                              disabled={Boolean(buyingCardId) || gold < offer.price}
+                              className="fm-button rounded px-2 py-1 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                            >
+                              Comprar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-        )}
+        ) : null}
+
+        {activeCategory === "ESTRUTURAIS" ? (
+          <>
+            <div className="mb-3 grid gap-2 rounded-lg border border-slate-700/80 bg-slate-900/55 p-2 md:grid-cols-2 xl:grid-cols-6">
+              <label className="text-[11px] text-slate-300">
+                Tipo
+                <select
+                  value={kindFilter}
+                  onChange={(event) => setKindFilter(event.target.value as "ALL" | "MONSTER" | "SPELL" | "TRAP")}
+                  className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
+                >
+                  <option value="ALL">Todos</option>
+                  <option value="MONSTER">Monster</option>
+                  <option value="SPELL">Spell</option>
+                  <option value="TRAP">Trap</option>
+                </select>
+              </label>
+
+              <label className="text-[11px] text-slate-300">
+                ATK min
+                <input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  value={atkMin}
+                  onChange={(event) => setAtkMin(Number(event.target.value) || 0)}
+                  className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
+                />
+              </label>
+
+              <label className="text-[11px] text-slate-300">
+                ATK max
+                <input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  value={atkMax}
+                  onChange={(event) => setAtkMax(Number(event.target.value) || 0)}
+                  className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
+                />
+              </label>
+
+              <label className="text-[11px] text-slate-300">
+                DEF min
+                <input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  value={defMin}
+                  onChange={(event) => setDefMin(Number(event.target.value) || 0)}
+                  className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
+                />
+              </label>
+
+              <label className="text-[11px] text-slate-300">
+                DEF max
+                <input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  value={defMax}
+                  onChange={(event) => setDefMax(Number(event.target.value) || 0)}
+                  className="mt-1 w-full rounded border border-slate-600/70 bg-slate-950/80 px-2 py-1 text-xs text-slate-100"
+                />
+              </label>
+
+              <label className="flex items-end gap-2 pb-1 text-[11px] text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={onlyUnowned}
+                  onChange={(event) => setOnlyUnowned(event.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-slate-500/80 bg-slate-950"
+                />
+                Somente nao possuo
+              </label>
+            </div>
+
+            {loading ? (
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <SkeletonCard key={`shop-skeleton-${index}`} className="h-[132px]" />
+                ))}
+              </div>
+            ) : filteredOffers.length === 0 ? (
+              <div className="rounded-lg border border-slate-700/80 bg-slate-900/55 px-3 py-4 text-center text-sm text-slate-300">
+                Nenhuma oferta encontrada com os filtros atuais.
+              </div>
+            ) : (
+              <div className="fm-scroll max-h-[68vh] overflow-y-auto pr-1">
+                <div className="mb-2 text-xs text-slate-300">Mostrando {filteredOffers.length} / {offers.length} ofertas.</div>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {filteredOffers.map((offer) => (
+                    <article key={offer.cardId} className="lobby-motion-card flex gap-2 rounded-lg border border-slate-700/80 bg-slate-900/65 p-2.5">
+                      <div className="h-[90px] w-[64px] shrink-0 overflow-hidden rounded border border-slate-600/75 bg-slate-900">
+                        {offer.imagePath ? (
+                          <img src={offer.imagePath} alt={offer.name} className="h-full w-full object-cover" loading="lazy" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">No Art</div>
+                        )}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-100">{offer.name}</p>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${segmentClasses(offer.segment)}`}>{offer.segment}</span>
+                          <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${rarityClasses(offer.rarity)}`}>{offer.rarity}</span>
+                          <span className="rounded border border-amber-200/45 bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-100">{offer.kind}</span>
+                        </div>
+
+                        {offer.kind === "MONSTER" ? (
+                          <p className="mt-1 text-xs text-slate-200">
+                            ATK <span className="font-semibold text-amber-100">{offer.atk ?? 0}</span> / DEF{" "}
+                            <span className="font-semibold text-cyan-100">{offer.def ?? 0}</span>
+                          </p>
+                        ) : (
+                          <p className="mt-1 max-h-[32px] overflow-hidden text-[11px] leading-snug text-slate-300">{offer.effectDescription ?? "Sem efeito descritivo."}</p>
+                        )}
+
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <span className="rounded border border-emerald-300/45 bg-emerald-900/35 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-100">Preco: {offer.price}</span>
+                          <span
+                            className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                              offer.affordable ? "border-cyan-300/45 bg-cyan-900/35 text-cyan-100" : "border-rose-300/45 bg-rose-900/35 text-rose-100"
+                            }`}
+                          >
+                            {offer.affordable ? "Compravel agora" : "Gold insuficiente"}
+                          </span>
+                          {offer.owned > 0 ? (
+                            <span className="rounded border border-slate-500/60 bg-slate-800/75 px-1.5 py-0.5 text-[10px] text-slate-200">Colecao x{offer.owned}</span>
+                          ) : null}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setOfferToConfirm(offer)}
+                          disabled={Boolean(buyingCardId) || gold < offer.price}
+                          className="fm-button mt-2 w-full rounded px-2 py-1 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {buyingCardId === offer.cardId ? "Comprando..." : gold >= offer.price ? "Comprar" : "Sem gold"}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        ) : null}
+
+        {activeCategory === "ACESSORIOS" ? (
+          <div className="rounded-lg border border-slate-700/80 bg-slate-900/55 px-3 py-5 text-sm text-slate-300">
+            <p className="font-semibold text-amber-100">Acessorios em breve</p>
+            <p className="mt-1">Molduras, temas de tabuleiro, cursores e efeitos cosmeticos serao adicionados nas proximas atualizacoes.</p>
+          </div>
+        ) : null}
       </GameCard>
 
       {offerToConfirm ? (

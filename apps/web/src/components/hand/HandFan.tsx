@@ -9,6 +9,7 @@ interface HandFanProps {
   selectedIds: string[];
   highlightedIds?: string[];
   badgeById?: Record<string, string>;
+  touchLayout?: boolean;
   registerCardElement?: (instanceId: string, element: HTMLButtonElement | null) => void;
   onCardClick: (card: CardClientView, index: number, anchorRect: AnchorRect) => void;
   onCardHover?: (card: CardClientView | null, anchorRect: AnchorRect | null) => void;
@@ -18,13 +19,13 @@ function cx(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-const CARD_W = 110;
-const CARD_H = 154;
 const BASE_GAP = 12;
 
-export function HandFan({ cards, selectedIds, highlightedIds, badgeById, registerCardElement, onCardClick, onCardHover }: HandFanProps) {
+export function HandFan({ cards, selectedIds, highlightedIds, badgeById, touchLayout = false, registerCardElement, onCardClick, onCardHover }: HandFanProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const holdTimerRef = useRef<number | null>(null);
+  const CARD_W = touchLayout ? 126 : 110;
+  const CARD_H = touchLayout ? 176 : 154;
 
   const overlap = useMemo(() => {
     if (cards.length <= 6) return 0;
@@ -62,7 +63,7 @@ export function HandFan({ cards, selectedIds, highlightedIds, badgeById, registe
             const highlighted = highlightedIds?.includes(card.instanceId) ?? false;
             const isHovered = hoveredId === card.instanceId;
             const angle = useOverlap ? Math.max(-10, Math.min(10, (index - fanCenter) * 2.2)) : 0;
-            const liftY = selected ? -34 : isHovered ? -30 : 8;
+            const liftY = selected ? -34 : isHovered ? -30 : touchLayout ? 4 : 8;
             const scale = selected ? 1.05 : isHovered ? 1.04 : 1;
             const marginLeft = index === 0 ? 0 : useOverlap ? -overlap : BASE_GAP;
             return (

@@ -184,7 +184,6 @@ export default function ShopPage() {
           <header className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h1 className="fm-title text-2xl font-bold">Card Trader</h1>
-              <p className="text-xs text-slate-300">Loja completa de cartas com rotacao, reroll e pacotes booster.</p>
             </div>
             <div className="flex gap-2">
               <Link href="/" className="fm-button rounded-md px-3 py-1.5 text-xs font-semibold">

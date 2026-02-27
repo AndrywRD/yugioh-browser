@@ -1,15 +1,15 @@
 import Link from "next/link";
-import type { Deck } from "@ruptura-arcana/shared";
+import { useEffect, useMemo, useState } from "react";
 import type { DeckListResponse, LevelProgress, PlayerAchievement, PlayerProfile } from "../../lib/api";
 import type { UiPreferences, UiScale } from "../../lib/uiPreferences";
+import { DeckCoverPicker } from "../deck/DeckCoverPicker";
 import { GameCard } from "./GameCard";
+import { LobbyIcon } from "./LobbyIcon";
 
 interface ProfilePanelProps {
   player: PlayerProfile | null;
   loading: boolean;
   decks: DeckListResponse;
-  activeDeck: Deck | null;
-  activeDeckTotal: number;
   levelProgress: LevelProgress | null;
   achievements: PlayerAchievement[];
   onSetActiveDeck: (deckId: string) => void;
@@ -18,10 +18,29 @@ interface ProfilePanelProps {
   onUpdateUiPreferences: (patch: Partial<UiPreferences>) => void;
 }
 
-function StatChip({ label, value }: { label: string; value: string | number }) {
+function StatChip({
+  label,
+  value,
+  icon
+}: {
+  label: string;
+  value: string | number;
+  icon:
+    | "profile"
+    | "gold"
+    | "level"
+    | "xp"
+    | "pve"
+    | "pvp"
+    | "achievement"
+    | "deck";
+}) {
   return (
     <div className="rounded-lg border border-slate-700/75 bg-slate-900/65 px-3 py-2">
-      <p className="text-[11px] uppercase tracking-[0.12em] text-slate-400">{label}</p>
+      <p className="flex items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-slate-400">
+        <LobbyIcon kind={icon} className="h-3.5 w-3.5 text-amber-200/90" />
+        <span>{label}</span>
+      </p>
       <p className="mt-1 text-sm font-semibold text-slate-100">{value}</p>
     </div>
   );
@@ -31,8 +50,6 @@ export function ProfilePanel({
   player,
   loading,
   decks,
-  activeDeck,
-  activeDeckTotal,
   levelProgress,
   achievements,
   onSetActiveDeck,
@@ -40,6 +57,18 @@ export function ProfilePanel({
   uiPreferences,
   onUpdateUiPreferences
 }: ProfilePanelProps) {
+  const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
+  const activeDeck = useMemo(() => decks.decks.find((deck) => deck.id === decks.activeDeckId) ?? null, [decks.activeDeckId, decks.decks]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!player?.publicId) {
+      setAvatarDataUrl(null);
+      return;
+    }
+    setAvatarDataUrl(window.localStorage.getItem(`ruptura_arcana_avatar_${player.publicId}`));
+  }, [player?.publicId]);
+
   if (!player) {
     return (
       <GameCard title="Perfil" subtitle="Acesso restrito para contas autenticadas.">
@@ -50,28 +79,29 @@ export function ProfilePanel({
 
   return (
     <div className="grid gap-3">
-      <GameCard title="Perfil do Duelista" subtitle="Informacoes da conta">
+      <GameCard title="Perfil do Duelista">
         {loading ? (
           <div className="h-[200px] animate-pulse rounded-lg border border-slate-700/70 bg-slate-800/60" />
         ) : (
           <div className="space-y-3">
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <StatChip label="Duelista" value={player.username} />
-              <StatChip label="Gold" value={player.gold} />
-              <StatChip label="Nivel" value={levelProgress?.level ?? player.level} />
-              <StatChip label="XP total" value={player.xp} />
-              <StatChip label="Wins PVE" value={player.winsPve} />
-              <StatChip label="Wins PVP" value={player.winsPvp} />
-              <StatChip label="Pts Conquista" value={player.achievementPoints} />
-              <StatChip label="Slots de Deck" value={player.deckSlotLimit} />
+            <div className="flex items-center gap-3 rounded-lg border border-slate-700/75 bg-slate-900/65 px-3 py-2">
+              <div className="h-12 w-12 overflow-hidden rounded-full border border-amber-300/60 bg-slate-950">
+                {avatarDataUrl ? <img src={avatarDataUrl} alt="Avatar" className="h-full w-full object-cover" /> : null}
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.12em] text-slate-400">Perfil</p>
+                <p className="text-sm font-semibold text-slate-100">{player.username}</p>
+              </div>
             </div>
-
-            <div className="rounded-lg border border-slate-700/75 bg-slate-900/65 p-3">
-              <p className="text-[11px] uppercase tracking-[0.12em] text-slate-400">Titulo e progressao</p>
-              <p className="mt-1 text-xs text-slate-200">{player.activeTitle ? `Titulo ativo: ${player.activeTitle}` : "Sem titulo ativo"}</p>
-              <p className="mt-1 text-xs text-slate-300">
-                XP no nivel: {levelProgress?.xpInLevel ?? 0} | XP para proximo: {levelProgress?.xpToNextLevel ?? 0}
-              </p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <StatChip label="Duelista" value={player.username} icon="profile" />
+              <StatChip label="Gold" value={player.gold} icon="gold" />
+              <StatChip label="Nivel" value={levelProgress?.level ?? player.level} icon="level" />
+              <StatChip label="XP total" value={player.xp} icon="xp" />
+              <StatChip label="Wins PVE" value={player.winsPve} icon="pve" />
+              <StatChip label="Wins PVP" value={player.winsPvp} icon="pvp" />
+              <StatChip label="Pts Conquista" value={player.achievementPoints} icon="achievement" />
+              <StatChip label="Slots de Deck" value={player.deckSlotLimit} icon="deck" />
             </div>
 
             <div className="rounded-lg border border-slate-700/75 bg-slate-900/65 p-3">
@@ -87,35 +117,30 @@ export function ProfilePanel({
                   </option>
                 ))}
               </select>
-              <p className="mt-2 text-xs text-slate-300">{activeDeck ? `${activeDeck.name} | ${activeDeckTotal}/40 cartas` : "Sem deck ativo"}</p>
+              <DeckCoverPicker deck={activeDeck} className="mt-3" />
             </div>
 
-            <div className="rounded-lg border border-slate-700/75 bg-slate-900/65 p-3">
-              <p className="text-[11px] uppercase tracking-[0.12em] text-slate-400">Conquistas recentes</p>
-              {achievements.length === 0 ? (
-                <p className="mt-2 text-xs text-slate-300">Nenhuma conquista desbloqueada ainda.</p>
-              ) : (
-                <div className="mt-2 grid gap-1.5">
-                  {achievements.slice(0, 4).map((achievement) => (
-                    <div key={achievement.key} className="rounded-md border border-slate-700/70 bg-slate-800/70 px-2 py-1.5">
-                      <p className="text-xs font-semibold text-amber-100">{achievement.title}</p>
-                      <p className="text-[11px] text-slate-300">{achievement.description}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Conquistas recentes removidas conforme solicitado */}
           </div>
         )}
       </GameCard>
 
-      <GameCard title="Acoes de Conta" subtitle="Gerencie seu perfil e configuracoes">
-        <div className="grid gap-2 sm:grid-cols-3">
+      <GameCard title="Acoes de Conta">
+        <div className="grid gap-2 sm:grid-cols-6">
           <Link href="/profile" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
             Editar Perfil
           </Link>
           <Link href="/deck-builder" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
             Abrir Deck Builder
+          </Link>
+          <Link href="/fusion-log" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
+            Fusion Log
+          </Link>
+          <Link href="/achievements" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
+            Conquistas
+          </Link>
+          <Link href="/pvp" className="fm-button rounded-lg px-3 py-2 text-center text-sm font-semibold">
+            Arena PvP
           </Link>
           <button type="button" onClick={onLogout} className="fm-button rounded-lg px-3 py-2 text-sm font-semibold">
             Sair

@@ -14,12 +14,12 @@ import { EndScreen } from "../../components/hud/EndScreen";
 import { HudLayer } from "../../components/hud/HudLayer";
 import { HintBanner } from "../../components/hud/HintBanner";
 import { LpHudImage } from "../../components/hud/LpHudImage";
-import { LogTicker } from "../../components/hud/LogTicker";
 import { PveDropsModal } from "../../components/hud/PveDropsModal";
 import { CardMenu, type CardMenuItem } from "../../components/ui/CardMenu";
 import { ContextMenuPortal } from "../../components/ui/ContextMenuPortal";
 import { HintsBar } from "../../components/ui/HintsBar";
-import type { AnchorRect } from "../../lib/anchors";
+import { DeckCoverPicker } from "../../components/deck/DeckCoverPicker";
+import { toAnchorRect, type AnchorRect } from "../../lib/anchors";
 import { AnimationQueue } from "../../lib/animation/animationQueue";
 import { duelFx } from "../../lib/animation/duelFx";
 import { playFusionAnimation, type FusionAnimationRequest } from "../../lib/animation/fusionAnimator";
@@ -149,10 +149,6 @@ interface SpellTrapActivatedPayload {
   continuous?: boolean;
 }
 
-interface CardDrawnPayload {
-  instanceId?: string;
-}
-
 interface TutorialObjectiveState {
   key: string;
   label: string;
@@ -220,16 +216,8 @@ function resolveSideToHud(side: BoardSide): "YOU" | "OPP" {
   return side === "PLAYER" ? "YOU" : "OPP";
 }
 
-function resolveDeckZoneRectId(side: BoardSide): "zone:deck:player" | "zone:deck:enemy" {
-  return side === "PLAYER" ? "zone:deck:player" : "zone:deck:enemy";
-}
-
 function resolveGraveZoneRectId(side: BoardSide): "zone:grave:player" | "zone:grave:enemy" {
   return side === "PLAYER" ? "zone:grave:player" : "zone:grave:enemy";
-}
-
-function resolveHandZoneRectId(side: BoardSide): "zone:hand:player" | "zone:hand:enemy" {
-  return side === "PLAYER" ? "zone:hand:player" : "zone:hand:enemy";
 }
 
 function resolveDirectAttackCenterRect(attackerSide: BoardSide, boardRoot: HTMLElement | null): DOMRect | null {
@@ -259,6 +247,14 @@ function uniqueMarkers(markers: SlotMarker[]): SlotMarker[] {
 function withTimestamp(message: string): string {
   const time = new Date().toLocaleTimeString("pt-BR", { hour12: false });
   return `${time} | ${message}`;
+}
+
+function isTextInputActive(): boolean {
+  if (typeof document === "undefined") return false;
+  const active = document.activeElement as HTMLElement | null;
+  if (!active) return false;
+  const tag = active.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || active.isContentEditable;
 }
 
 function upsertSlotFx(current: SlotFx[], entry: SlotFx): SlotFx[] {
@@ -378,6 +374,7 @@ function isEquipEffectKey(effectKey?: string): boolean {
 
 const LAST_ROOM_CODE_STORAGE_KEY = "ruptura_arcana_last_room_code";
 const LOBBY_NOTICES_STORAGE_KEY = "ruptura_arcana_lobby_notices";
+const DUEL_FX_ENABLED = true;
 
 function parseTutorialLessonId(value: string | null): TutorialLessonId | null {
   if (value === "1" || value === "2" || value === "3") return value;
@@ -426,9 +423,9 @@ export default function HomePage() {
   const [slotFx, setSlotFx] = useState<SlotFx[]>([]);
   const [floatingDamages, setFloatingDamages] = useState<FloatingDamage[]>([]);
   const [tickerLines, setTickerLines] = useState<string[]>([]);
-  const [showLogPanel, setShowLogPanel] = useState(false);
   const [fusionLog, setFusionLog] = useState<FusionDiscoveryEntry[]>([]);
   const [showFusionLogModal, setShowFusionLogModal] = useState(false);
+  const [showFusionLogPanel, setShowFusionLogPanel] = useState(false);
   const [fusionLogSearch, setFusionLogSearch] = useState("");
   const [previewCard, setPreviewCard] = useState<PreviewCardData | null>(null);
   const [endState, setEndState] = useState<DuelOutcome | null>(null);
@@ -462,9 +459,6 @@ export default function HomePage() {
   const deferredSnapshotRef = useRef<SnapshotPacket | null>(null);
   const lastAppliedSnapshotVersionRef = useRef(0);
   const pendingVisualAnimationsRef = useRef(0);
-  const drawSyncVersionRef = useRef<number | null>(null);
-  const turnIntroRunningRef = useRef(false);
-  const turnIntroStartVersionRef = useRef<number | null>(null);
   const latestTurnPlayerFromEventsRef = useRef<string | null>(null);
   const latestEventVersionRef = useRef(0);
   const pendingSnapshotHoldRef = useRef<SnapshotPacket | null>(null);
@@ -493,9 +487,6 @@ export default function HomePage() {
 
   const flushDeferredSnapshotIfReady = useCallback(() => {
     if (fusionAnimatingRef.current) return;
-    if (turnIntroRunningRef.current) return;
-    if (drawSyncVersionRef.current !== null) return;
-    if (pendingVisualAnimationsRef.current > 0) return;
     const deferred = deferredSnapshotRef.current;
     if (!deferred) return;
     if (snapshotRef.current && deferred.version > latestEventVersionRef.current) return;
@@ -520,12 +511,7 @@ export default function HomePage() {
       pendingSnapshotHoldTimerRef.current = window.setTimeout(() => {
         const held = pendingSnapshotHoldRef.current;
         if (!held || held.version !== packet.version) return;
-        if (
-          !fusionAnimatingRef.current &&
-          !turnIntroRunningRef.current &&
-          drawSyncVersionRef.current === null &&
-          pendingVisualAnimationsRef.current === 0
-        ) {
+        if (!fusionAnimatingRef.current) {
           applySnapshotPacket(held);
         } else {
           deferredSnapshotRef.current = held;
@@ -539,6 +525,7 @@ export default function HomePage() {
 
   const enqueueVisualAnimation = useCallback(
     (_version: number, task: () => Promise<void>) => {
+      if (!DUEL_FX_ENABLED) return;
       pendingVisualAnimationsRef.current += 1;
       void animationQueueRef.current.enqueue(async () => {
         try {
@@ -961,7 +948,9 @@ export default function HomePage() {
   const hint = snapshot ? buildHint(interaction, snapshot) : "";
   const showMatch = Boolean(snapshot) && (roomState?.status === "RUNNING" || roomState?.status === "FINISHED");
   const autoEntryRequested = Boolean(roomCodeFromQuery) || autoCreateFromQuery || autoSoloFromQuery;
-  const waitingMatchBootstrap = autoEntryRequested && !showMatch && !gameError && !roomError;
+  const waitingForRoomBootstrap = autoEntryRequested && !roomState && !gameError && !roomError;
+  const waitingForRunningSnapshot = autoEntryRequested && roomState?.status === "RUNNING" && !snapshot && !gameError && !roomError;
+  const waitingMatchBootstrap = waitingForRoomBootstrap || waitingForRunningSnapshot;
   const inLobby = roomState && roomState.status === "LOBBY";
   const duelOutcome = useMemo(() => resolveDuelOutcome(snapshot, playerId), [snapshot, playerId]);
   const tutorialLesson = useMemo(() => getTutorialLesson(tutorialLessonId), [tutorialLessonId]);
@@ -1090,7 +1079,6 @@ export default function HomePage() {
       setRoomError("Sessao nao encontrada. Faca login no lobby.");
       return;
     }
-    socket.connect();
 
     const onConnect = () => {
       setConnected(true);
@@ -1104,29 +1092,6 @@ export default function HomePage() {
     socket.on("auth:session", (payload: { playerId: string }) => {
       setPlayerId(payload.playerId);
       socket.emit("deck:list", {});
-
-      if (roomCodeFromQuery && !autoJoinAttemptedRef.current) {
-        autoJoinAttemptedRef.current = true;
-        setJoinCode(roomCodeFromQuery);
-        socket.emit("room:join", {
-          roomCode: roomCodeFromQuery,
-          username: usernameFromQuery || username
-        });
-      } else if (autoSoloFromQuery && !autoJoinAttemptedRef.current) {
-        autoJoinAttemptedRef.current = true;
-        if (!syncActiveDeckToServer()) {
-          setRoomError("Deck invalido. Corrija no deck builder para iniciar o tutorial.");
-          return;
-        }
-        socket.emit("room:solo", {
-          username: usernameFromQuery || username
-        });
-      } else if (autoCreateFromQuery && !autoJoinAttemptedRef.current) {
-        autoJoinAttemptedRef.current = true;
-        socket.emit("room:create", {
-          username: usernameFromQuery || username
-        });
-      }
     });
     socket.on("deck:list", (payload: DeckListPayload) => {
       const remoteCollection = ensureDeckCollection({
@@ -1158,14 +1123,7 @@ export default function HomePage() {
       const pendingFusionVersion = pendingFusionSnapshotVersionRef.current;
       const shouldDeferFusion =
         fusionAnimatingRef.current && pendingFusionVersion !== null && payload.version >= pendingFusionVersion;
-      const shouldDeferDrawSync = drawSyncVersionRef.current !== null && payload.version === drawSyncVersionRef.current;
-      const shouldDeferTurnIntro =
-        turnIntroRunningRef.current &&
-        turnIntroStartVersionRef.current !== null &&
-        payload.version > turnIntroStartVersionRef.current;
-      const shouldDeferWhileVisualQueueBusy =
-        pendingVisualAnimationsRef.current > 0 && payload.version > lastAppliedSnapshotVersionRef.current;
-      if (shouldDeferFusion || shouldDeferDrawSync || shouldDeferTurnIntro || shouldDeferWhileVisualQueueBusy) {
+      if (shouldDeferFusion) {
         deferredSnapshotRef.current = payload;
         return;
       }
@@ -1190,7 +1148,7 @@ export default function HomePage() {
       }
       const fusionEvent = payload.events.find((event) => event.type === "FUSION_RESOLVED" || event.type === "FUSION_FAILED");
       let fusionAnimationScheduled = false;
-      if (fusionEvent && snapshotRef.current) {
+      if (DUEL_FX_ENABLED && fusionEvent && snapshotRef.current) {
         const animationRequest = buildFusionAnimationRequestFromEvent(snapshotRef.current, fusionEvent, playerId);
         if (animationRequest) {
           fusionAnimationScheduled = true;
@@ -1214,8 +1172,6 @@ export default function HomePage() {
       const translated = payload.events.map((event) => eventToText(event, playerId));
       setLogs((prev) => [...translated.map((line) => withTimestamp(line)), ...prev].slice(0, 100));
       setTickerLines((prev) => [...translated, ...prev].slice(0, 8));
-      const drawEvents: Array<{ side: BoardSide; instanceId?: string }> = [];
-      let turnBannerSide: "player" | "enemy" | null = null;
 
       for (const event of payload.events) {
         if (tutorialLessonId && playerId) {
@@ -1255,13 +1211,7 @@ export default function HomePage() {
           continue;
         }
 
-        if (event.type === "CARD_DRAWN" && event.playerId && playerId) {
-          const drawPayload = event.payload as CardDrawnPayload | undefined;
-          const side: BoardSide = event.playerId === playerId ? "PLAYER" : "ENEMY";
-          drawEvents.push({
-            side,
-            instanceId: typeof drawPayload?.instanceId === "string" ? drawPayload.instanceId : undefined
-          });
+        if (event.type === "CARD_DRAWN") {
           continue;
         }
 
@@ -1454,39 +1404,6 @@ export default function HomePage() {
             }
           }
 
-          const destroyTargets: Array<{ side: BoardSide; slot: number }> = [];
-          if (Array.isArray(battle?.destroyed) && playerId) {
-            for (const destroyed of battle.destroyed) {
-              destroyTargets.push({ side: destroyed.playerId === playerId ? "PLAYER" : "ENEMY", slot: destroyed.slot });
-            }
-          } else if (
-            battle?.mode === "EFFECT_DESTROY" &&
-            typeof battle.slot === "number" &&
-            typeof battle.targetPlayerId === "string" &&
-            playerId
-          ) {
-            destroyTargets.push({ side: battle.targetPlayerId === playerId ? "PLAYER" : "ENEMY", slot: battle.slot });
-          }
-
-          if (destroyTargets.length) {
-            enqueueVisualAnimation(payload.version, async () => {
-              for (const [index, target] of destroyTargets.entries()) {
-                const cardRect = rectRegistry.getSlotRect(buildSlotRectId(target.side, "MONSTER", target.slot));
-                const graveRect = rectRegistry.getSlotRect(resolveGraveZoneRectId(target.side));
-                if (!cardRect || !graveRect) continue;
-                await duelFx.destroyCard(fusionOverlayRef.current, {
-                  cardRect,
-                  graveRect,
-                  strength: battle?.mode === "EFFECT_DESTROY" ? 3 : 2,
-                  boardRoot: boardAnimRootRef.current
-                });
-                if (index < destroyTargets.length - 1) {
-                  await new Promise((resolve) => window.setTimeout(resolve, 40));
-                }
-              }
-            });
-          }
-
           let impactRect: DOMRect | null = null;
           if (battle?.mode === "DIRECT" && event.playerId && playerId) {
             const attackerSide: BoardSide = event.playerId === playerId ? "PLAYER" : "ENEMY";
@@ -1512,6 +1429,7 @@ export default function HomePage() {
         }
 
         if (event.type === "LP_CHANGED") {
+          if (!DUEL_FX_ENABLED) continue;
           const lp = event.payload as { delta?: number } | undefined;
           const delta = Number(lp?.delta ?? 0);
           if (!delta) continue;
@@ -1575,72 +1493,14 @@ export default function HomePage() {
             });
           }
 
-          if (activated?.source === "SET" && typeof activated.slot === "number" && !activated.continuous) {
-            const spellRect = rectRegistry.getSlotRect(buildSlotRectId(casterSide, "SPELL_TRAP", activated.slot));
-            const graveRect = rectRegistry.getSlotRect(resolveGraveZoneRectId(casterSide));
-            if (spellRect && graveRect) {
-              enqueueVisualAnimation(payload.version, async () => {
-                await duelFx.sendToGrave(fusionOverlayRef.current, {
-                  cardRect: spellRect,
-                  destRect: graveRect,
-                  strength: 1
-                });
-              });
-            }
-          }
           continue;
         }
 
         if (event.type === "TURN_CHANGED") {
           setWaitingAttackResolution(false);
-          if (event.playerId && playerId) {
-            turnBannerSide = event.playerId === playerId ? "player" : "enemy";
-          }
           sfx.play("end_turn");
           continue;
         }
-      }
-
-      if (turnBannerSide || drawEvents.length > 0) {
-        drawSyncVersionRef.current = payload.version;
-        turnIntroRunningRef.current = Boolean(turnBannerSide);
-        turnIntroStartVersionRef.current = turnBannerSide ? payload.version : null;
-        enqueueVisualAnimation(payload.version, async () => {
-          try {
-            if (turnBannerSide) {
-              await duelFx.playTurnBanner(fusionOverlayRef.current, { side: turnBannerSide, phase: "MAIN" });
-            }
-            for (const [index, drawEvent] of drawEvents.entries()) {
-              const deckRect = rectRegistry.getSlotRect(resolveDeckZoneRectId(drawEvent.side));
-              const handRect = rectRegistry.getSlotRect(resolveHandZoneRectId(drawEvent.side));
-              if (!deckRect || !handRect) continue;
-
-              let cardTexture: string | undefined;
-              if (drawEvent.side === "PLAYER" && drawEvent.instanceId && snapshotRef.current) {
-                cardTexture = findCardByInstanceId(snapshotRef.current, drawEvent.instanceId)?.imagePath;
-              }
-
-              await duelFx.drawToHand(fusionOverlayRef.current, {
-                deckRect,
-                handRectOrSlot: handRect,
-                cardTexture
-              });
-
-              if (index < drawEvents.length - 1) {
-                await new Promise((resolve) => window.setTimeout(resolve, 70));
-              }
-            }
-          } finally {
-            if (turnIntroStartVersionRef.current === payload.version) {
-              turnIntroRunningRef.current = false;
-              turnIntroStartVersionRef.current = null;
-            }
-            if (drawSyncVersionRef.current === payload.version) {
-              drawSyncVersionRef.current = null;
-            }
-            flushDeferredSnapshotIfReady();
-          }
-        });
       }
 
       flushDeferredSnapshotIfReady();
@@ -1673,12 +1533,64 @@ export default function HomePage() {
       }
     });
 
+    if (socket.connected) {
+      onConnect();
+    } else {
+      socket.connect();
+    }
+
     return () => {
       clearPendingSnapshotHold();
       socket.removeAllListeners();
       socket.disconnect();
     };
   }, [playerId]);
+
+  useEffect(() => {
+    if (!playerId || !connected) return;
+    if (autoJoinAttemptedRef.current) return;
+
+    const resolvedUsername = usernameFromQuery || username;
+    if (roomCodeFromQuery) {
+      autoJoinAttemptedRef.current = true;
+      setJoinCode(roomCodeFromQuery);
+      socket.emit("room:join", {
+        roomCode: roomCodeFromQuery,
+        username: resolvedUsername
+      });
+      return;
+    }
+
+    if (autoSoloFromQuery) {
+      autoJoinAttemptedRef.current = true;
+      if (!syncActiveDeckToServer()) {
+        setRoomError("Deck invalido. Corrija no deck builder para iniciar o tutorial.");
+        return;
+      }
+      socket.emit("room:solo", {
+        username: resolvedUsername
+      });
+      return;
+    }
+
+    if (autoCreateFromQuery) {
+      autoJoinAttemptedRef.current = true;
+      socket.emit("room:create", {
+        username: resolvedUsername
+      });
+    }
+  }, [playerId, connected, roomCodeFromQuery, autoSoloFromQuery, autoCreateFromQuery, usernameFromQuery, username]);
+
+  useEffect(() => {
+    if (!waitingMatchBootstrap) return;
+
+    const timeoutId = window.setTimeout(() => {
+      setRoomError("Nao foi possivel conectar automaticamente. Tente criar/entrar na sala manualmente.");
+      autoJoinAttemptedRef.current = false;
+    }, 7000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [waitingMatchBootstrap]);
 
   useEffect(() => {
     if (!playerId) return;
@@ -1854,8 +1766,8 @@ export default function HomePage() {
     setSlotFx([]);
     setFloatingDamages([]);
     setTickerLines([]);
-    setShowLogPanel(false);
     setShowFusionLogModal(false);
+    setShowFusionLogPanel(false);
     setFusionLogSearch("");
     setMenuAnchorRect(null);
     setAttackHoverSlot(null);
@@ -1869,9 +1781,6 @@ export default function HomePage() {
     lastAppliedSnapshotVersionRef.current = 0;
     pendingVisualAnimationsRef.current = 0;
     fusionAnimatingRef.current = false;
-    drawSyncVersionRef.current = null;
-    turnIntroRunningRef.current = false;
-    turnIntroStartVersionRef.current = null;
     latestEventVersionRef.current = 0;
     clearPendingSnapshotHold();
     animationQueueRef.current = new AnimationQueue();
@@ -2059,6 +1968,110 @@ export default function HomePage() {
     });
     setInteraction(idleInteraction());
   };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!snapshot) return;
+
+      if (event.key === "Escape") {
+        let consumed = false;
+        if (showFusionLogModal) {
+          setShowFusionLogModal(false);
+          consumed = true;
+        }
+        if (showFusionLogPanel) {
+          setShowFusionLogPanel(false);
+          consumed = true;
+        }
+        if (isFlowState(interaction) || interaction.kind === "cardMenuOpen") {
+          setInteraction(idleInteraction());
+          setMenuAnchorRect(null);
+          consumed = true;
+        }
+        if (consumed) {
+          event.preventDefault();
+          sfx.play("ui_cancel");
+        }
+        return;
+      }
+
+      if (isTextInputActive()) return;
+
+      if (/^[1-5]$/.test(event.key)) {
+        const handIndex = Number(event.key) - 1;
+        const card = snapshot.you.hand?.[handIndex];
+        if (!card) return;
+        const cardRect =
+          rectRegistry.getCardRect(card.instanceId) ??
+          new DOMRect(window.innerWidth * 0.5 - 55, window.innerHeight - 180, 110, 154);
+        onHandCardClick(card, handIndex, toAnchorRect(cardRect));
+        event.preventDefault();
+        return;
+      }
+
+      if (event.key === " ") {
+        if (isMyTurn && !inputLockedByCombat) {
+          submitEndTurn();
+          event.preventDefault();
+        }
+        return;
+      }
+
+      const lowered = event.key.toLowerCase();
+
+      if (lowered === "a") {
+        if (!isMyTurn || !selectedCard || selectedCard.source !== "FIELD") return;
+        const slotIndex = snapshot.you.monsterZone.findIndex((monster) => monster?.instanceId === selectedCard.instanceId);
+        if (slotIndex < 0) return;
+        const ownMonster = snapshot.you.monsterZone[slotIndex];
+        if (!canMonsterAttack(snapshot, ownMonster)) return;
+        setInteraction({ kind: "attack_chooseTarget", attackerSlot: slotIndex });
+        event.preventDefault();
+        sfx.play("ui_confirm");
+        return;
+      }
+
+      if (lowered === "i") {
+        if (!isMyTurn || !selectedCard || selectedCard.source !== "HAND") return;
+        const canSummon = canUseSummonOrFusion(snapshot) && getEmptyOwnSlots(snapshot).length > 0;
+        if (!canSummon) return;
+        setInteraction({ kind: "summon_selectSlot", handInstanceId: selectedCard.instanceId });
+        event.preventDefault();
+        sfx.play("ui_open_menu");
+        return;
+      }
+
+      if (event.key === "Enter") {
+        const canConclude = interaction.kind === "fusion_selectMaterials" && interaction.materials.length >= 2;
+        if (canConclude) {
+          setInteraction({ kind: "fusion_chooseResultSlot", materials: interaction.materials });
+          event.preventDefault();
+          sfx.play("ui_confirm");
+          return;
+        }
+        if (interaction.kind === "attack_chooseTarget" && directAttackAvailable) {
+          submitAttack(interaction.attackerSlot, "DIRECT");
+          event.preventDefault();
+          sfx.play("ui_confirm");
+          return;
+        }
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    snapshot,
+    showFusionLogModal,
+    showFusionLogPanel,
+    interaction,
+    isMyTurn,
+    inputLockedByCombat,
+    selectedCard,
+    rectRegistry,
+    sfx,
+    directAttackAvailable
+  ]);
 
   const persistDeckCollection = (next: DeckCollection) => {
     const normalized = ensureDeckCollection(next);
@@ -2341,12 +2354,14 @@ export default function HomePage() {
     interaction.kind === "cardMenuOpen";
   const boardShellClassName = isMobileLayout
     ? "relative flex-none overflow-x-auto overflow-y-visible pb-2"
-    : "relative min-h-0 flex-1 overflow-visible";
-  const boardRootClassName = isMobileLayout ? "relative z-board mx-auto min-w-[960px]" : "relative z-board h-full";
+    : "relative min-h-0 flex-1 overflow-hidden";
+  const boardRootClassName = isMobileLayout
+    ? "relative z-board mx-auto min-w-[820px]"
+    : "relative z-board flex h-full items-center justify-center";
   const handWrapClassName = isMobileLayout
-    ? "pointer-events-none relative z-hand mx-auto mt-2 w-full max-w-[980px] overflow-visible px-2"
+    ? "pointer-events-none relative z-hand mx-auto mt-0 w-full max-w-[860px] overflow-visible px-2"
     : `pointer-events-none absolute inset-x-0 z-hand mx-auto w-full max-w-[1520px] overflow-visible px-2 transition-all ${
-        prioritizingBoardSlotClick ? "bottom-[-34px] opacity-95" : "bottom-[-26px]"
+        prioritizingBoardSlotClick ? "bottom-[-22px] opacity-95" : "bottom-[-14px]"
       }`;
   const handRailClassName = isMobileLayout
     ? "mx-auto h-[196px] w-full overflow-visible"
@@ -2357,17 +2372,14 @@ export default function HomePage() {
 
   return (
     <main
-      className={`fm-screen fm-noise-overlay mx-auto flex min-h-[100dvh] w-full max-w-none flex-col overflow-x-hidden overflow-y-auto ${
+      className={`fm-screen fm-noise-overlay mx-auto flex h-[100dvh] w-full max-w-none flex-col overflow-hidden ${
         compactMatchHeader ? "gap-2 p-2" : "gap-3 p-4"
       }`}
     >
       <header className={`fm-panel shrink-0 ${compactMatchHeader ? "px-3 py-2" : "px-4 py-3"}`}>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h1 className={`fm-title font-bold ${compactMatchHeader ? "text-lg" : "text-xl"}`}>Ruptura Arcana</h1>
-            <p className={`fm-subtitle ${compactMatchHeader ? "text-[11px]" : "text-xs"}`}>
-              Socket: {connected ? "conectado" : "desconectado"} {playerId ? `| PlayerId: ${playerId}` : ""}
-            </p>
+            <h1 className={`fm-title font-bold ${compactMatchHeader ? "text-lg" : "text-xl"}`}>Yu-Gi-Oh! Súbita</h1>
           </div>
           <button
             type="button"
@@ -2420,6 +2432,7 @@ export default function HomePage() {
               Deck Builder
             </Link>
           </div>
+          <DeckCoverPicker deck={activeDeck} />
           <p className={`text-xs ${isActiveDeckValid ? "text-emerald-300" : "text-rose-300"}`}>
             Deck ativo: {activeDeck?.name ?? "--"} | {activeDeckValidation?.total ?? 0}/40
             {!isActiveDeckValid && activeDeckValidation?.errors[0] ? ` | ${activeDeckValidation.errors[0]}` : ""}
@@ -2474,6 +2487,7 @@ export default function HomePage() {
               Editar Decks
             </Link>
           </div>
+          <DeckCoverPicker deck={activeDeck} />
           <p className={`text-xs ${isActiveDeckValid ? "text-emerald-300" : "text-rose-300"}`}>
             Deck ativo: {activeDeck?.name ?? "--"} | {activeDeckValidation?.total ?? 0}/40
             {!isActiveDeckValid && activeDeckValidation?.errors[0] ? ` | ${activeDeckValidation.errors[0]}` : ""}
@@ -2516,13 +2530,14 @@ export default function HomePage() {
 
       {showMatch && snapshot && (
         <section
-          className={`grid ${isMobileLayout ? "flex-none gap-2 overflow-visible" : "min-h-0 flex-1 gap-3 overflow-visible"} ${
-            showLogPanel ? "lg:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-1"
+          className={`grid ${
+            isMobileLayout
+              ? "flex-none gap-2 overflow-visible grid-cols-1"
+              : `min-h-0 flex-1 gap-3 overflow-hidden ${showFusionLogPanel ? "lg:grid-cols-[minmax(0,1fr)_320px]" : "grid-cols-1"}`
           }`}
         >
           <div className={`fm-panel fm-frame relative flex flex-col gap-1 overflow-visible p-2 ${isMobileLayout ? "" : "min-h-0"}`}>
             <div className={boardShellClassName}>
-              <LogTicker lines={tickerLines} className={isMobileLayout ? "top-[106px]" : "top-[58px]"} />
               <div ref={boardAnimRootRef} className={boardRootClassName}>
                 <BoardStage
                   playerMonsters={playerMonsters}
@@ -2547,10 +2562,10 @@ export default function HomePage() {
                   targetSlots={targetBoardSlots}
                   highlightedSlots={highlightedBoardSlots}
                   slotBadges={slotBadges}
-                  slotEffects={slotFx}
+                  slotEffects={DUEL_FX_ENABLED ? slotFx : []}
                   targetingMode={targetingMode}
-                  attackEffectSlot={attackEffectSlot}
-                  hitEffectSlot={hitEffectSlot}
+                  attackEffectSlot={DUEL_FX_ENABLED ? attackEffectSlot : null}
+                  hitEffectSlot={DUEL_FX_ENABLED ? hitEffectSlot : null}
                   onHoverSlot={(slotIndex, side, zone, hoverRect) => {
                     if (!snapshot || interaction.kind !== "attack_chooseTarget" || side !== "ENEMY" || zone !== "MONSTER") {
                       if (interaction.kind !== "attack_chooseTarget") setAttackHoverSlot(null);
@@ -2654,20 +2669,19 @@ export default function HomePage() {
                   </div>
                 )}
 
-                <div className={`pointer-events-auto absolute z-tooltip flex flex-col items-end gap-1.5 ${isMobileLayout ? "right-1 top-[78px]" : "right-2 top-2"}`}>
+                <div className={`pointer-events-auto absolute z-tooltip flex items-end ${isMobileLayout ? "right-1 top-[78px]" : "right-2 top-2"}`}>
                   <button
                     type="button"
-                    onClick={() => setShowLogPanel((current) => !current)}
-                    className="fm-button inline-flex w-auto rounded-md px-2 py-1 text-[11px] font-semibold"
+                    onClick={() => {
+                      if (isMobileLayout) {
+                        setShowFusionLogModal(true);
+                        return;
+                      }
+                      setShowFusionLogPanel((current) => !current);
+                    }}
+                    className="fm-button inline-flex w-auto rounded-md px-2.5 py-1 text-xs font-semibold"
                   >
-                    {showLogPanel ? "Fechar Log" : "Abrir Log"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowFusionLogModal(true)}
-                    className="fm-button inline-flex w-auto rounded-md px-2 py-1 text-[11px] font-semibold"
-                  >
-                    Fusion Log
+                    {isMobileLayout ? "Fusion Log" : showFusionLogPanel ? "Fechar Fusion Log" : "Abrir Fusion Log"}
                   </button>
                 </div>
 
@@ -2682,7 +2696,12 @@ export default function HomePage() {
                 <EndTurnButton
                   enabled={isMyTurn}
                   onEndTurn={submitEndTurn}
-                  className={isMobileLayout ? "left-1/2 top-[49%] -translate-x-1/2 -translate-y-1/2" : "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"}
+                  shortcutHint="Espaco"
+                  className={
+                    isMobileLayout
+                      ? "right-[3%] top-[49%] -translate-y-1/2"
+                      : "right-[16%] top-1/2 -translate-y-1/2"
+                  }
                 />
 
                 <ActionTray visible={showActionTray} className={actionTrayClassName}>
@@ -2773,9 +2792,9 @@ export default function HomePage() {
                 </ActionTray>
               </HudLayer>
 
-              {floatingDamages.map((item) => (
-                <DamageNumber key={item.id} value={item.value} type={item.type} side={item.side} />
-              ))}
+              {DUEL_FX_ENABLED
+                ? floatingDamages.map((item) => <DamageNumber key={item.id} value={item.value} type={item.type} side={item.side} />)
+                : null}
 
               <CardPreview card={previewSelection} dimmed={Boolean(targetingMode)} />
 
@@ -2789,6 +2808,7 @@ export default function HomePage() {
                     selectedIds={selectedHandIds}
                     highlightedIds={highlightedHandIds}
                     badgeById={handBadgeById}
+                    touchLayout={isMobileLayout}
                     registerCardElement={rectRegistry.registerCardElement}
                     onCardClick={onHandCardClick}
                     onCardHover={(card) => {
@@ -2983,33 +3003,58 @@ export default function HomePage() {
             </div>
           )}
 
-          {showLogPanel && (
-            <aside className={`fm-panel flex min-h-0 w-full flex-col gap-2 overflow-hidden p-3 ${isMobileLayout ? "" : "max-w-[320px]"}`}>
-            <h3 className="text-sm font-semibold text-slate-100">Estado rapido</h3>
-            <p className="text-xs text-slate-300">Room: {roomState?.roomCode}</p>
-            <p className="text-xs text-slate-300">Seu cemiterio: {snapshot.you.graveyard.length}</p>
-            <p className="text-xs text-slate-300">Cemiterio inimigo: {snapshot.opponent.graveyard.length}</p>
-            {snapshot.winnerId && <p className="rounded bg-emerald-900/50 p-2 text-sm text-emerald-200">Vencedor: {snapshot.winnerId}</p>}
+          {!isMobileLayout && showFusionLogPanel ? (
+            <aside className="fm-panel fm-scroll flex min-h-0 w-full flex-col gap-2 overflow-y-auto p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="fm-title text-sm font-semibold">Fusion Log</h3>
+                <span className="rounded border border-slate-500/70 bg-slate-900/75 px-2 py-0.5 text-xs text-slate-100">
+                  {filteredFusionLog.length}
+                </span>
+              </div>
+              <input
+                value={fusionLogSearch}
+                onChange={(event) => setFusionLogSearch(event.target.value)}
+                placeholder="Buscar por resultado ou tag..."
+                className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+              />
+              <div className="fm-scroll min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                {filteredFusionLog.length === 0 ? (
+                  <p className="rounded border border-slate-700 bg-slate-950/90 p-3 text-sm text-slate-200">Nenhuma fusao encontrada.</p>
+                ) : (
+                  filteredFusionLog.map((entry) => {
+                    const resultCard = CARD_INDEX[entry.resultCardId];
+                    const materialNames =
+                      entry.materialCardIds.length > 0
+                        ? entry.materialCardIds.map((cardId) => CARD_INDEX[cardId]?.name ?? cardId)
+                        : [];
 
-            <div className="mt-1 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-100">Log</h3>
-              <button className="fm-button rounded px-2 py-1 text-xs" onClick={() => setLogs([])}>
-                Limpar
-              </button>
-            </div>
-            <div className="fm-scroll max-h-[40vh] min-h-0 flex-1 overflow-auto rounded bg-slate-950/80 p-2 text-xs text-slate-200">
-              {logs.length === 0 && <p className="text-slate-500">Sem eventos.</p>}
-              {logs.map((line, index) => (
-                <p key={`${line}-${index}`} className="border-b border-slate-800 py-1">
-                  {line}
-                </p>
-              ))}
-            </div>
-            <button className="fm-button rounded-lg px-3 py-2 text-sm font-semibold" onClick={leaveRoom}>
-              Sair da partida
-            </button>
+                    return (
+                      <article key={entry.key} className="rounded-lg border border-slate-700 bg-slate-950/90 p-2.5">
+                        <div className="flex items-start gap-2.5">
+                          <div className="h-16 w-12 shrink-0 overflow-hidden rounded border border-slate-600/70 bg-slate-900">
+                            {resultCard?.imagePath ? (
+                              <img src={resultCard.imagePath} alt={entry.resultName} className="h-full w-full object-cover" loading="lazy" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400">No Art</div>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-fuchsia-100">{entry.resultName}</p>
+                            <p className="text-xs text-amber-200">
+                              ATK/DEF: {resultCard?.atk ?? 0}/{resultCard?.def ?? 0}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-200">
+                              Materiais: {materialNames.length ? materialNames.join(" + ") : entry.materialTags.join(" - ")}
+                            </p>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })
+                )}
+              </div>
             </aside>
-          )}
+          ) : null}
         </section>
       )}
     </main>

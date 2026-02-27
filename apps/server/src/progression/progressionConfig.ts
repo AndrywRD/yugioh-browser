@@ -1,18 +1,5 @@
 export type ProgressEventKey = "PVE_WIN" | "PVE_PLAY" | "PVP_WIN" | "PVP_PLAY" | "DUEL_PLAY" | "SHOP_BUY" | "FUSION_DISCOVERY";
 
-export type DailyMissionCategory = "PVE" | "PVP" | "SHOP" | "FUSION" | "GENERAL";
-
-export interface DailyMissionDefinition {
-  key: string;
-  title: string;
-  description: string;
-  category: DailyMissionCategory;
-  eventKey: ProgressEventKey;
-  target: number;
-  rewardGold: number;
-  rewardXp: number;
-}
-
 export type AchievementRequirement =
   | { type: "WINS_PVE"; target: number }
   | { type: "WINS_PVP"; target: number }
@@ -61,80 +48,6 @@ const BASE_LEVEL_XP = 110;
 const LINEAR_LEVEL_XP = 28;
 const POWER_LEVEL_XP = 7.5;
 
-export const DAILY_MISSION_SLOT_COUNT = 3;
-
-export const DAILY_MISSION_CATALOG: DailyMissionDefinition[] = [
-  {
-    key: "PVE_WIN_2",
-    title: "Treino de Campanha",
-    description: "Venca 2 duelos PVE.",
-    category: "PVE",
-    eventKey: "PVE_WIN",
-    target: 2,
-    rewardGold: 75,
-    rewardXp: 110
-  },
-  {
-    key: "PVE_WIN_4",
-    title: "Limpeza de Arena",
-    description: "Venca 4 duelos PVE.",
-    category: "PVE",
-    eventKey: "PVE_WIN",
-    target: 4,
-    rewardGold: 150,
-    rewardXp: 220
-  },
-  {
-    key: "PVP_PLAY_2",
-    title: "Sangue Frio",
-    description: "Jogue 2 duelos PVP.",
-    category: "PVP",
-    eventKey: "PVP_PLAY",
-    target: 2,
-    rewardGold: 120,
-    rewardXp: 180
-  },
-  {
-    key: "PVP_WIN_1",
-    title: "Duelista de Elite",
-    description: "Venca 1 duelo PVP.",
-    category: "PVP",
-    eventKey: "PVP_WIN",
-    target: 1,
-    rewardGold: 160,
-    rewardXp: 210
-  },
-  {
-    key: "SHOP_BUY_3",
-    title: "Mercador Arcano",
-    description: "Compre 3 cartas na loja.",
-    category: "SHOP",
-    eventKey: "SHOP_BUY",
-    target: 3,
-    rewardGold: 90,
-    rewardXp: 135
-  },
-  {
-    key: "FUSION_DISCOVER_2",
-    title: "Alquimista Arcano",
-    description: "Descubra 2 novas fusoes.",
-    category: "FUSION",
-    eventKey: "FUSION_DISCOVERY",
-    target: 2,
-    rewardGold: 130,
-    rewardXp: 190
-  },
-  {
-    key: "DUEL_PLAY_5",
-    title: "Ritmo de Duelo",
-    description: "Jogue 5 duelos no total.",
-    category: "GENERAL",
-    eventKey: "DUEL_PLAY",
-    target: 5,
-    rewardGold: 120,
-    rewardXp: 170
-  }
-];
 
 export const ACHIEVEMENT_CATALOG: AchievementDefinition[] = [
   {
@@ -291,31 +204,6 @@ export function xpRewardForPvpLoss(): number {
   return 90;
 }
 
-function hashString(value: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-export function buildDailyMissionSet(playerId: string, missionDate: string): DailyMissionDefinition[] {
-  const pool = [...DAILY_MISSION_CATALOG];
-  const selected: DailyMissionDefinition[] = [];
-  let salt = hashString(`${playerId}:${missionDate}`);
-
-  while (selected.length < Math.min(DAILY_MISSION_SLOT_COUNT, pool.length)) {
-    salt = Math.imul(salt ^ 0x9e3779b9, 2654435761) >>> 0;
-    const index = salt % pool.length;
-    const [picked] = pool.splice(index, 1);
-    if (!picked) continue;
-    selected.push(picked);
-  }
-
-  return selected;
-}
-
 export function resolveAchievementProgress(requirement: AchievementRequirement, metrics: PlayerProgressMetrics): number {
   switch (requirement.type) {
     case "WINS_PVE":
@@ -336,4 +224,3 @@ export function resolveAchievementProgress(requirement: AchievementRequirement, 
       return 0;
   }
 }
-

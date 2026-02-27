@@ -95,6 +95,10 @@ function getPublicIdFromRequest(request: { headers: Record<string, string | stri
   return getHeaderValue(request.headers[PLAYER_HEADER] as string | string[] | undefined);
 }
 
+function getOnlinePlayerPublicIds(): Set<string> {
+  return new Set(socketToPlayer.values());
+}
+
 function emitRoomState(room: RuntimeRoom): void {
   const roomState: RoomState = roomManager.toRoomState(room);
   io.to(room.code).emit("room:state", roomState);
@@ -125,6 +129,91 @@ async function emitDeckState(socketId: string, playerPublicId: string): Promise<
 
 async function resolvePlayerDeckTemplateIds(playerPublicId: string): Promise<string[]> {
   return persistence.getActiveDeckTemplateIds(playerPublicId);
+}
+
+function buildPvpLobbySnapshot(viewerPublicId: string): {
+  onlinePlayers: Array<{
+    playerId: string;
+    username: string;
+    inRoom: boolean;
+    roomCode: string | null;
+  }>;
+  openRooms: Array<{
+    roomCode: string;
+    hostUsername: string;
+    players: Array<{ playerId: string; username: string; online: boolean }>;
+    playerCount: number;
+    status: "LOBBY" | "RUNNING" | "FINISHED";
+  }>;
+} {
+  const rooms = roomManager.listRooms().filter((room) => room.mode === "PVP");
+
+  const onlinePlayersById = new Map<
+    string,
+    {
+      playerId: string;
+      username: string;
+      inRoom: boolean;
+      roomCode: string | null;
+    }
+  >();
+
+  for (const room of rooms) {
+    for (const player of room.players) {
+      if (player.type !== "HUMAN" || !player.online) continue;
+      onlinePlayersById.set(player.playerId, {
+        playerId: player.playerId,
+        username: player.username,
+        inRoom: true,
+        roomCode: room.code
+      });
+    }
+  }
+
+  const openRooms = rooms
+    .map((room) => {
+      const host = room.players.find((player) => player.playerId === room.hostId) ?? room.players[0];
+      const status: "LOBBY" | "RUNNING" | "FINISHED" = room.gameState
+        ? room.gameState.status === "RUNNING"
+          ? "RUNNING"
+          : "FINISHED"
+        : "LOBBY";
+      return {
+        roomCode: room.code,
+        hostUsername: host?.username ?? "Host",
+        players: room.players
+          .filter((player) => player.type === "HUMAN")
+          .map((player) => ({
+            playerId: player.playerId,
+            username: player.username,
+            online: player.online
+          })),
+        playerCount: room.players.filter((player) => player.type === "HUMAN").length,
+        status
+      };
+    })
+    .sort((left, right) => left.roomCode.localeCompare(right.roomCode));
+
+  if (!onlinePlayersById.has(viewerPublicId)) {
+    const viewerRoom = roomManager.getRoomByPlayer(viewerPublicId);
+    if (viewerRoom) {
+      const viewer = viewerRoom.players.find((player) => player.playerId === viewerPublicId);
+      if (viewer && viewer.type === "HUMAN") {
+        onlinePlayersById.set(viewerPublicId, {
+          playerId: viewer.playerId,
+          username: viewer.username,
+          inRoom: true,
+          roomCode: viewerRoom.code
+        });
+      }
+    }
+  }
+
+  const onlinePlayers = Array.from(onlinePlayersById.values()).sort((left, right) => left.username.localeCompare(right.username));
+  return {
+    onlinePlayers,
+    openRooms
+  };
 }
 
 function emitSnapshots(room: RuntimeRoom): void {
@@ -566,22 +655,269 @@ app.get("/api/progression", async (request, reply) => {
   }
 });
 
-app.post("/api/progression/missions/:missionKey/claim", async (request, reply) => {
+app.get("/api/achievements", async (request, reply) => {
   const publicId = getPublicIdFromRequest(request);
   if (!publicId) {
     return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
   }
 
-  const params = (request.params ?? {}) as { missionKey?: string };
-  if (!params.missionKey || typeof params.missionKey !== "string") {
-    return reply.status(400).send({ message: "missionKey obrigatorio." });
+  try {
+    const dashboard = await persistence.getAchievementDashboard(publicId);
+    return reply.send(dashboard);
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao buscar conquistas." });
+  }
+});
+
+app.post("/api/player/title", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const body = (request.body ?? {}) as { title?: unknown };
+  const rawTitle = body.title;
+  const title = typeof rawTitle === "string" ? rawTitle : rawTitle == null ? null : String(rawTitle);
+
+  try {
+    const player = await persistence.equipPlayerTitle(publicId, title);
+    return reply.send({ player });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao equipar titulo." });
+  }
+});
+
+app.get("/api/pvp/lobby", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
   }
 
   try {
-    const progression = await persistence.claimDailyMission(publicId, params.missionKey);
-    return reply.send(progression);
+    await persistence.getPlayerByPublicId(publicId);
+    const snapshot = buildPvpLobbySnapshot(publicId);
+    return reply.send(snapshot);
   } catch (error) {
-    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao resgatar missao." });
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao buscar lobby PvP." });
+  }
+});
+
+app.get("/api/social/snapshot", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  try {
+    const snapshot = await persistence.getSocialSnapshot(publicId, getOnlinePlayerPublicIds());
+    return reply.send(snapshot);
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao buscar dados sociais." });
+  }
+});
+
+app.get("/api/social/search", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const query = (request.query ?? {}) as { q?: string; limit?: string | number };
+  const q = typeof query.q === "string" ? query.q : "";
+  const rawLimit = typeof query.limit === "number" ? query.limit : Number(query.limit ?? 24);
+  const limit = Number.isFinite(rawLimit) ? rawLimit : 24;
+
+  try {
+    const users = await persistence.searchSocialPlayers(publicId, q, getOnlinePlayerPublicIds(), limit);
+    return reply.send({ users });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao buscar jogadores." });
+  }
+});
+
+app.post("/api/social/requests", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const body = (request.body ?? {}) as { targetPublicId?: unknown };
+  const targetPublicId = typeof body.targetPublicId === "string" ? body.targetPublicId.trim() : "";
+  if (!targetPublicId) {
+    return reply.status(400).send({ message: "targetPublicId obrigatorio." });
+  }
+
+  try {
+    await persistence.sendFriendRequest(publicId, targetPublicId);
+    const snapshot = await persistence.getSocialSnapshot(publicId, getOnlinePlayerPublicIds());
+    return reply.send({ snapshot });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao enviar solicitacao." });
+  }
+});
+
+app.post("/api/social/requests/:targetPublicId/accept", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const params = (request.params ?? {}) as { targetPublicId?: string };
+  const requesterPublicId = params.targetPublicId?.trim() ?? "";
+  if (!requesterPublicId) {
+    return reply.status(400).send({ message: "targetPublicId obrigatorio." });
+  }
+
+  try {
+    await persistence.acceptFriendRequest(publicId, requesterPublicId);
+    const snapshot = await persistence.getSocialSnapshot(publicId, getOnlinePlayerPublicIds());
+    return reply.send({ snapshot });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao aceitar solicitacao." });
+  }
+});
+
+app.post("/api/social/requests/:targetPublicId/reject", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const params = (request.params ?? {}) as { targetPublicId?: string };
+  const requesterPublicId = params.targetPublicId?.trim() ?? "";
+  if (!requesterPublicId) {
+    return reply.status(400).send({ message: "targetPublicId obrigatorio." });
+  }
+
+  try {
+    await persistence.declineFriendRequest(publicId, requesterPublicId);
+    const snapshot = await persistence.getSocialSnapshot(publicId, getOnlinePlayerPublicIds());
+    return reply.send({ snapshot });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao recusar solicitacao." });
+  }
+});
+
+app.delete("/api/social/requests/:targetPublicId", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const params = (request.params ?? {}) as { targetPublicId?: string };
+  const targetPublicId = params.targetPublicId?.trim() ?? "";
+  if (!targetPublicId) {
+    return reply.status(400).send({ message: "targetPublicId obrigatorio." });
+  }
+
+  try {
+    await persistence.cancelFriendRequest(publicId, targetPublicId);
+    const snapshot = await persistence.getSocialSnapshot(publicId, getOnlinePlayerPublicIds());
+    return reply.send({ snapshot });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao cancelar solicitacao." });
+  }
+});
+
+app.delete("/api/social/friends/:friendPublicId", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const params = (request.params ?? {}) as { friendPublicId?: string };
+  const friendPublicId = params.friendPublicId?.trim() ?? "";
+  if (!friendPublicId) {
+    return reply.status(400).send({ message: "friendPublicId obrigatorio." });
+  }
+
+  try {
+    await persistence.removeFriend(publicId, friendPublicId);
+    const snapshot = await persistence.getSocialSnapshot(publicId, getOnlinePlayerPublicIds());
+    return reply.send({ snapshot });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao remover amigo." });
+  }
+});
+
+app.get("/api/social/conversations/:friendPublicId", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const params = (request.params ?? {}) as { friendPublicId?: string };
+  const friendPublicId = params.friendPublicId?.trim() ?? "";
+  if (!friendPublicId) {
+    return reply.status(400).send({ message: "friendPublicId obrigatorio." });
+  }
+
+  try {
+    const messages = await persistence.listSocialConversation(publicId, friendPublicId);
+    return reply.send({ messages });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao carregar conversa." });
+  }
+});
+
+app.post("/api/social/conversations/:friendPublicId/messages", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const params = (request.params ?? {}) as { friendPublicId?: string };
+  const friendPublicId = params.friendPublicId?.trim() ?? "";
+  if (!friendPublicId) {
+    return reply.status(400).send({ message: "friendPublicId obrigatorio." });
+  }
+
+  const body = (request.body ?? {}) as { text?: unknown };
+  const text = typeof body.text === "string" ? body.text : "";
+  if (!text.trim()) {
+    return reply.status(400).send({ message: "text obrigatorio." });
+  }
+
+  try {
+    const messages = await persistence.sendSocialMessage(publicId, friendPublicId, text);
+    return reply.send({ messages });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao enviar mensagem." });
+  }
+});
+
+app.post("/api/social/conversations/:friendPublicId/read", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  const params = (request.params ?? {}) as { friendPublicId?: string };
+  const friendPublicId = params.friendPublicId?.trim() ?? "";
+  if (!friendPublicId) {
+    return reply.status(400).send({ message: "friendPublicId obrigatorio." });
+  }
+
+  try {
+    await persistence.markSocialConversationRead(publicId, friendPublicId);
+    const snapshot = await persistence.getSocialSnapshot(publicId, getOnlinePlayerPublicIds());
+    return reply.send({ snapshot });
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao marcar conversa como lida." });
+  }
+});
+
+app.get("/api/social/ranking", async (request, reply) => {
+  const publicId = getPublicIdFromRequest(request);
+  if (!publicId) {
+    return reply.status(401).send({ message: `Header '${PLAYER_HEADER}' obrigatorio.` });
+  }
+
+  try {
+    const ranking = await persistence.getSocialRanking(publicId, getOnlinePlayerPublicIds());
+    return reply.send(ranking);
+  } catch (error) {
+    return reply.status(400).send({ message: error instanceof Error ? error.message : "Falha ao buscar ranking." });
   }
 });
 

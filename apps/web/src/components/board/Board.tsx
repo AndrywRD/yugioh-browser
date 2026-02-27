@@ -3,7 +3,7 @@ export function Board() {
     <div className="relative h-full w-full overflow-hidden rounded-2xl border border-amber-200/20 shadow-[0_30px_70px_rgba(0,0,0,0.45)]">
       <img
         src="/board/board-widescreen.png"
-        alt="Ruptura Arcana board"
+        alt="Yu-Gi-Oh! Súbita board"
         className="h-full w-full object-cover"
         style={{ filter: "contrast(1.05) saturate(1.05)" }}
       />

@@ -22,9 +22,7 @@ import {
   deckCardTotal,
   duplicateDeck,
   ensureDeckCollection,
-  exportDeckAsJson,
   getDeckById,
-  importDeckFromJson,
   loadDeckCollection,
   removeCardFromDeck,
   removeDeck,
@@ -41,7 +39,6 @@ const PAGE_SIZE = 120;
 
 type SortMode = "NAME_ASC" | "ATK_DESC" | "DEF_DESC" | "NUMBER_ASC" | "COST_ASC" | "RARITY";
 type KindFilter = "ALL" | "MONSTER" | "SPELL" | "TRAP";
-type DeckToolsTab = "SAVE" | "IMPORT_EXPORT" | "LOGS";
 type DeckBuilderCard = {
   id: string;
   name: string;
@@ -159,9 +156,7 @@ export default function DeckBuilderPage() {
   const [defMax, setDefMax] = useState("5000");
   const [sortMode, setSortMode] = useState<SortMode>("NUMBER_ASC");
   const [page, setPage] = useState(1);
-  const [toolTab, setToolTab] = useState<DeckToolsTab>("SAVE");
-  const [importText, setImportText] = useState("");
-  const [actionLogs, setActionLogs] = useState<string[]>([]);
+  const [, setActionLogs] = useState<string[]>([]);
   const [saveError, setSaveError] = useState("");
 
   const [feedback, setFeedback] = useState("");
@@ -613,42 +608,6 @@ export default function DeckBuilderPage() {
       });
   };
 
-  const handleExportDeck = async () => {
-    if (!activeDeck) return;
-    const serialized = exportDeckAsJson(activeDeck);
-    try {
-      await navigator.clipboard.writeText(serialized);
-      setFeedback("JSON do deck copiado para a area de transferencia.");
-      appendActionLog("Deck exportado (clipboard).");
-    } catch {
-      setImportText(serialized);
-      setFeedback("Falha ao copiar. JSON carregado no campo de importacao.");
-      appendActionLog("Falha no clipboard; JSON carregado no campo.");
-    }
-  };
-
-  const handleImportDeck = () => {
-    try {
-      const imported = importDeckFromJson(importText);
-      const withName: Deck = {
-        ...imported,
-        name: imported.name?.trim() ? imported.name : `Deck ${collection.decks.length + 1}`
-      };
-      const next = setDeckActive(upsertDeck(collection, withName), withName.id);
-      persistCollection(next);
-      setImportText("");
-      setSelectedCardId(null);
-      setSaveError("");
-      appendActionLog(`Deck importado: ${withName.name}.`);
-      setFeedback("Deck importado com sucesso.");
-    } catch (error) {
-      const message = formatError(error);
-      setFeedback(message);
-      setSaveError(message);
-      appendActionLog(`Falha ao importar deck: ${message}.`);
-    }
-  };
-
   const handleUndo = () => {
     if (!activeDeck || undoStack.length === 0) return;
     const [previous, ...rest] = undoStack;
@@ -1039,7 +998,20 @@ export default function DeckBuilderPage() {
                   const ownedCopies = ownedCountByCard.get(entry.cardId) ?? 0;
                   const canIncrease = Boolean(card) && entry.count < Math.min(3, ownedCopies) && deckTotal < 40;
                   return (
-                    <li key={entry.cardId} className="grid min-h-[56px] grid-cols-[1fr_auto] items-center gap-2 rounded bg-slate-900/80 p-2 text-xs">
+                    <li key={entry.cardId} className="grid min-h-[62px] grid-cols-[42px_1fr_auto] items-center gap-2 rounded bg-slate-900/80 p-2 text-xs">
+                      <div className="h-[54px] w-[38px] overflow-hidden rounded border border-slate-600/70 bg-slate-950">
+                        {card?.imagePath && !brokenImageIds[entry.cardId] ? (
+                          <img
+                            src={card.imagePath}
+                            alt={card.name}
+                            className="h-full w-full object-cover"
+                            loading="lazy"
+                            onError={() => setBrokenImageIds((current) => ({ ...current, [entry.cardId]: true }))}
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[9px] text-slate-400">Sem arte</div>
+                        )}
+                      </div>
                       <div className="min-w-0">
                         <button
                           type="button"
@@ -1082,87 +1054,6 @@ export default function DeckBuilderPage() {
             )}
           </div>
 
-          <div className="mt-3 rounded-lg bg-slate-950/45 p-2">
-            <div className="mb-2 flex flex-wrap gap-2">
-              {([
-                ["SAVE", "Salvar"],
-                ["IMPORT_EXPORT", "Importar/Exportar"],
-                ["LOGS", "Logs"]
-              ] as const).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setToolTab(key)}
-                  className={`rounded-md px-2 py-1 text-xs font-semibold ${
-                    toolTab === key ? "bg-cyan-900/40 text-cyan-100 ring-1 ring-cyan-300/55" : "bg-slate-800 text-slate-300"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            {toolTab === "SAVE" ? (
-              <div className="space-y-2 text-xs text-slate-300">
-                <p>{hasUnsavedChanges ? `${pendingChanges} alteracao(oes) pendente(s).` : "Tudo salvo."}</p>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={handleSaveDeck}
-                    disabled={!validation?.ok || !hasUnsavedChanges || mutatingDeck}
-                    className="fm-button rounded-md px-3 py-1.5 font-semibold disabled:cursor-not-allowed disabled:opacity-45"
-                  >
-                    Salvar no servidor
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleUndo}
-                    disabled={undoStack.length === 0}
-                    className="fm-button rounded-md px-3 py-1.5 font-semibold disabled:cursor-not-allowed disabled:opacity-45"
-                  >
-                    Desfazer (Ctrl+Z)
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {toolTab === "IMPORT_EXPORT" ? (
-              <div className="space-y-2">
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={handleExportDeck} className="fm-button rounded-md px-3 py-1.5 text-xs font-semibold">
-                    Exportar JSON
-                  </button>
-                  <button type="button" onClick={handleImportDeck} className="fm-button rounded-md px-3 py-1.5 text-xs font-semibold">
-                    Colar e importar
-                  </button>
-                </div>
-                <textarea
-                  value={importText}
-                  onChange={(event) => setImportText(event.target.value)}
-                  placeholder='Cole JSON do deck para importar'
-                  className="h-24 w-full rounded-lg border border-slate-700 bg-slate-800 p-2 text-xs"
-                />
-              </div>
-            ) : null}
-
-            {toolTab === "LOGS" ? (
-              <div className="space-y-2 text-xs">
-                <div className="max-h-28 overflow-y-auto rounded bg-slate-900/70 p-2">
-                  {actionLogs.length === 0 ? (
-                    <p className="text-slate-400">Sem eventos recentes.</p>
-                  ) : (
-                    <ul className="space-y-1 text-slate-300">
-                      {actionLogs.map((line, index) => (
-                        <li key={`${line}-${index}`}>{line}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <p className="text-slate-300">{feedback || "Sem mensagens."}</p>
-                {syncError ? <p className="text-rose-300">Sync: {syncError}</p> : null}
-              </div>
-            ) : null}
-          </div>
         </article>
 
         <article className="fm-panel fm-frame rounded-xl p-4 lg:col-span-2 xl:col-span-1">

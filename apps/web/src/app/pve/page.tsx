@@ -17,7 +17,7 @@ import {
 import { HudStage } from "../../components/ui/HudStage";
 
 type NpcSortKey = "REWARD_DESC" | "RAREST_DROP" | "PROGRESS" | "DIFFICULTY";
-type DropSortKey = "MISSING_FIRST" | "RAREST_FIRST" | "VALUE_DESC" | "TARGET_FIRST";
+type DropSortKey = "MISSING_FIRST" | "RAREST_FIRST" | "VALUE_DESC";
 type DropKindFilter = "ALL" | "MONSTER" | "SPELL" | "TRAP";
 
 type DropRow = {
@@ -33,18 +33,12 @@ type DropRow = {
   effectDescription?: string;
   imagePath?: string;
   owned: boolean;
-  target: boolean;
   scoreValue: number;
 };
 
 const STORAGE_KEYS = {
   compactMode: "ruptura_arcana_pve_compact_mode_v2",
-  favoriteNpcIds: "ruptura_arcana_pve_favorite_npc_ids_v2",
-  pinnedNpcIds: "ruptura_arcana_pve_pinned_npc_ids_v2",
-  wishlistCardIds: "ruptura_arcana_pve_wishlist_card_ids_v2",
-  showOnlyTargetNpcs: "ruptura_arcana_pve_show_only_target_npcs_v2",
-  npcSortKey: "ruptura_arcana_pve_sort_key_v2",
-  tierFilter: "ruptura_arcana_pve_tier_filter_v2"
+  npcSortKey: "ruptura_arcana_pve_sort_key_v2"
 } as const;
 
 function parseStoredBoolean(key: string, fallback: boolean): boolean {
@@ -53,28 +47,6 @@ function parseStoredBoolean(key: string, fallback: boolean): boolean {
   if (raw === "1") return true;
   if (raw === "0") return false;
   return fallback;
-}
-
-function parseStoredStringArray(key: string): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((value) => String(value ?? "").trim()).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-function parseStoredTierFilter(): number | "ALL" {
-  if (typeof window === "undefined") return "ALL";
-  const raw = window.localStorage.getItem(STORAGE_KEYS.tierFilter);
-  if (!raw || raw === "ALL") return "ALL";
-  const value = Number(raw);
-  if (!Number.isFinite(value)) return "ALL";
-  return Math.max(0, Math.floor(value));
 }
 
 function parseStoredNpcSort(): NpcSortKey {
@@ -89,11 +61,6 @@ function parseStoredNpcSort(): NpcSortKey {
 function persistBoolean(key: string, value: boolean): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(key, value ? "1" : "0");
-}
-
-function persistStringArray(key: string, value: string[]): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(key, JSON.stringify(Array.from(new Set(value)).sort((left, right) => left.localeCompare(right))));
 }
 
 function normalizeSlug(value: string): string {
@@ -148,8 +115,8 @@ function buildPortraitCandidates(npc: PveNpc): string[] {
 }
 
 function statusView(npc: PveNpc): { label: string; className: string } {
-  if (!npc.unlocked) return { label: "Bloqueado", className: "border-slate-500/60 bg-slate-800/70 text-slate-300" };
-  if (npc.defeated) return { label: "Derrotado", className: "border-emerald-400/50 bg-emerald-900/30 text-emerald-200" };
+  if (!npc.unlocked) return { label: "\ud83d\udd12 Bloqueado", className: "border-slate-500/60 bg-slate-800/70 text-slate-300" };
+  if (npc.defeated) return { label: "\u2705 Concluido", className: "border-emerald-400/50 bg-emerald-900/30 text-emerald-200" };
   return { label: "Disponivel", className: "border-cyan-400/50 bg-cyan-900/30 text-cyan-100" };
 }
 
@@ -178,7 +145,7 @@ function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
-function mapDropsForNpc(npc: PveNpc, tracker: PveDropProgress | undefined, wishlistCardIdSet: Set<string>): DropRow[] {
+function mapDropsForNpc(npc: PveNpc, tracker: PveDropProgress | undefined): DropRow[] {
   const obtainedSet = new Set(tracker?.obtainedCardIds ?? []);
   return npc.rewardCards.map((drop) => {
     const card = CARD_INDEX[drop.cardId];
@@ -197,7 +164,6 @@ function mapDropsForNpc(npc: PveNpc, tracker: PveDropProgress | undefined, wishl
       effectDescription: card?.effectDescription,
       imagePath,
       owned: obtainedSet.has(drop.cardId),
-      target: wishlistCardIdSet.has(drop.cardId),
       scoreValue: dropScoreValue(drop.cardId)
     };
   });
@@ -206,16 +172,8 @@ function mapDropsForNpc(npc: PveNpc, tracker: PveDropProgress | undefined, wishl
 function sortDropRows(rows: DropRow[], sortKey: DropSortKey): DropRow[] {
   const sorted = [...rows];
   sorted.sort((left, right) => {
-    if (sortKey === "TARGET_FIRST") {
-      if (left.target !== right.target) return left.target ? -1 : 1;
-      if (left.owned !== right.owned) return left.owned ? 1 : -1;
-      if (left.chance !== right.chance) return left.chance - right.chance;
-      return right.scoreValue - left.scoreValue;
-    }
-
     if (sortKey === "MISSING_FIRST") {
       if (left.owned !== right.owned) return left.owned ? 1 : -1;
-      if (left.target !== right.target) return left.target ? -1 : 1;
       if (left.chance !== right.chance) return left.chance - right.chance;
       return right.scoreValue - left.scoreValue;
     }
@@ -234,40 +192,20 @@ function sortDropRows(rows: DropRow[], sortKey: DropSortKey): DropRow[] {
   return sorted;
 }
 
-function pickTopDrops(rows: DropRow[]): DropRow[] {
-  const sorted = [...rows];
-  sorted.sort((left, right) => {
-    if (left.target !== right.target) return left.target ? -1 : 1;
-    if (left.owned !== right.owned) return left.owned ? 1 : -1;
-    if (left.chance !== right.chance) return left.chance - right.chance;
-    return right.scoreValue - left.scoreValue;
-  });
-  return sorted.slice(0, 3);
-}
-
-function toggleStringValue(values: string[], value: string): string[] {
-  return values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value];
-}
-
 export default function PvePage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [player, setPlayer] = useState<PlayerProfile | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [npcs, setNpcs] = useState<PveNpc[]>([]);
   const [dropProgressRows, setDropProgressRows] = useState<PveDropProgress[]>([]);
   const [busyNpcId, setBusyNpcId] = useState<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [compactMode, setCompactMode] = useState<boolean>(() => parseStoredBoolean(STORAGE_KEYS.compactMode, true));
-  const [showOnlyTargetNpcs, setShowOnlyTargetNpcs] = useState<boolean>(() => parseStoredBoolean(STORAGE_KEYS.showOnlyTargetNpcs, false));
   const [npcSortKey, setNpcSortKey] = useState<NpcSortKey>(() => parseStoredNpcSort());
-  const [tierFilter, setTierFilter] = useState<number | "ALL">(() => parseStoredTierFilter());
-
-  const [favoriteNpcIds, setFavoriteNpcIds] = useState<string[]>(() => parseStoredStringArray(STORAGE_KEYS.favoriteNpcIds));
-  const [pinnedNpcIds, setPinnedNpcIds] = useState<string[]>(() => parseStoredStringArray(STORAGE_KEYS.pinnedNpcIds));
-  const [wishlistCardIds, setWishlistCardIds] = useState<string[]>(() => parseStoredStringArray(STORAGE_KEYS.wishlistCardIds));
 
   const [portraitIndexByNpcId, setPortraitIndexByNpcId] = useState<Record<string, number>>({});
   const [selectedNpcId, setSelectedNpcId] = useState<string | null>(null);
@@ -278,18 +216,10 @@ export default function PvePage() {
   const [previewCardId, setPreviewCardId] = useState<string | null>(null);
 
   useEffect(() => persistBoolean(STORAGE_KEYS.compactMode, compactMode), [compactMode]);
-  useEffect(() => persistBoolean(STORAGE_KEYS.showOnlyTargetNpcs, showOnlyTargetNpcs), [showOnlyTargetNpcs]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(STORAGE_KEYS.npcSortKey, npcSortKey);
   }, [npcSortKey]);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(STORAGE_KEYS.tierFilter, tierFilter === "ALL" ? "ALL" : String(tierFilter));
-  }, [tierFilter]);
-  useEffect(() => persistStringArray(STORAGE_KEYS.favoriteNpcIds, favoriteNpcIds), [favoriteNpcIds]);
-  useEffect(() => persistStringArray(STORAGE_KEYS.pinnedNpcIds, pinnedNpcIds), [pinnedNpcIds]);
-  useEffect(() => persistStringArray(STORAGE_KEYS.wishlistCardIds, wishlistCardIds), [wishlistCardIds]);
 
   useEffect(() => {
     const load = async () => {
@@ -318,6 +248,15 @@ export default function PvePage() {
     void load();
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!player?.publicId) {
+      setAvatarUrl(null);
+      return;
+    }
+    setAvatarUrl(window.localStorage.getItem(`ruptura_arcana_avatar_${player.publicId}`));
+  }, [player?.publicId]);
+
   const dropProgressByNpcId = useMemo(() => {
     return dropProgressRows.reduce<Record<string, PveDropProgress>>((acc, row) => {
       acc[row.npcId] = row;
@@ -325,33 +264,17 @@ export default function PvePage() {
     }, {});
   }, [dropProgressRows]);
 
-  const favoriteNpcIdSet = useMemo(() => new Set(favoriteNpcIds), [favoriteNpcIds]);
-  const pinnedNpcIdSet = useMemo(() => new Set(pinnedNpcIds), [pinnedNpcIds]);
-  const wishlistCardIdSet = useMemo(() => new Set(wishlistCardIds), [wishlistCardIds]);
-
-  const tiers = useMemo(() => {
-    const unique = Array.from(new Set(npcs.map((npc) => npc.tier)));
-    unique.sort((left, right) => left - right);
-    return unique;
-  }, [npcs]);
-
   const npcDropsByNpcId = useMemo(() => {
     return npcs.reduce<Record<string, DropRow[]>>((acc, npc) => {
-      acc[npc.id] = mapDropsForNpc(npc, dropProgressByNpcId[npc.id], wishlistCardIdSet);
+      acc[npc.id] = mapDropsForNpc(npc, dropProgressByNpcId[npc.id]);
       return acc;
     }, {});
-  }, [dropProgressByNpcId, npcs, wishlistCardIdSet]);
+  }, [dropProgressByNpcId, npcs]);
 
   const filteredSortedNpcs = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     const rows = npcs.filter((npc) => {
-      if (tierFilter !== "ALL" && npc.tier !== tierFilter) return false;
       if (normalizedSearch && !npc.name.toLowerCase().includes(normalizedSearch) && !npc.id.toLowerCase().includes(normalizedSearch)) return false;
-      if (showOnlyTargetNpcs) {
-        const drops = npcDropsByNpcId[npc.id] ?? [];
-        const hasTarget = drops.some((drop) => drop.target && !drop.owned);
-        if (!hasTarget) return false;
-      }
       return true;
     });
 
@@ -368,14 +291,6 @@ export default function PvePage() {
     };
 
     rows.sort((left, right) => {
-      const leftPinned = pinnedNpcIdSet.has(left.id);
-      const rightPinned = pinnedNpcIdSet.has(right.id);
-      if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
-
-      const leftFav = favoriteNpcIdSet.has(left.id);
-      const rightFav = favoriteNpcIdSet.has(right.id);
-      if (leftFav !== rightFav) return leftFav ? -1 : 1;
-
       if (npcSortKey === "REWARD_DESC") {
         if (left.rewardGold !== right.rewardGold) return right.rewardGold - left.rewardGold;
       } else if (npcSortKey === "RAREST_DROP") {
@@ -395,7 +310,7 @@ export default function PvePage() {
     });
 
     return rows;
-  }, [dropProgressByNpcId, favoriteNpcIdSet, npcDropsByNpcId, npcSortKey, npcs, pinnedNpcIdSet, searchTerm, showOnlyTargetNpcs, tierFilter]);
+  }, [dropProgressByNpcId, npcDropsByNpcId, npcSortKey, npcs, searchTerm]);
 
   const selectedNpc = useMemo(() => {
     if (!selectedNpcId) return null;
@@ -441,30 +356,7 @@ export default function PvePage() {
     return selectedNpcDrops.find((drop) => drop.cardId === previewCardId) ?? null;
   }, [previewCardId, selectedNpcDrops]);
 
-  const tierSummary = useMemo(() => {
-    const scope = tierFilter === "ALL" ? npcs : npcs.filter((npc) => npc.tier === tierFilter);
-    const unlockedCount = scope.filter((npc) => npc.unlocked).length;
-    const defeatedCount = scope.filter((npc) => npc.defeated).length;
-
-    let totalPossible = 0;
-    let obtained = 0;
-    for (const npc of scope) {
-      const tracker = dropProgressByNpcId[npc.id];
-      if (!tracker) continue;
-      totalPossible += tracker.totalPossible;
-      obtained += tracker.obtainedCount;
-    }
-    const completionPercent = totalPossible > 0 ? clampPercent((obtained / totalPossible) * 100) : 0;
-
-    return {
-      scopeCount: scope.length,
-      unlockedCount,
-      defeatedCount,
-      obtained,
-      totalPossible,
-      completionPercent
-    };
-  }, [dropProgressByNpcId, npcs, tierFilter]);
+  const unlockedNpcCount = useMemo(() => npcs.filter((npc) => npc.unlocked).length, [npcs]);
 
   const handleDuel = async (npc: PveNpc): Promise<void> => {
     if (!player || !npc.unlocked) return;
@@ -505,11 +397,12 @@ export default function PvePage() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h1 className="fm-title text-lg font-bold">Campanha PVE</h1>
-              <p className="text-xs text-slate-300">
-                {tierFilter === "ALL" ? "Todos os tiers" : `Tier ${tierFilter}`} - {tierSummary.unlockedCount}/{tierSummary.scopeCount} desbloqueados
-              </p>
+              <p className="text-xs text-slate-300">{unlockedNpcCount}/{npcs.length} NPCs desbloqueados</p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="h-10 w-10 overflow-hidden rounded-full border border-amber-300/60 bg-slate-900/80">
+                {avatarUrl ? <img src={avatarUrl} alt="Avatar" className="h-full w-full object-cover" /> : null}
+              </div>
               <Link href="/" className="fm-button rounded-md px-3 py-1.5 text-xs font-semibold">
                 Voltar ao Lobby
               </Link>
@@ -545,60 +438,6 @@ export default function PvePage() {
               <input type="checkbox" checked={compactMode} onChange={(event) => setCompactMode(event.target.checked)} />
               Modo compacto
             </label>
-            <label className="flex items-center gap-2 rounded-md border border-slate-700/80 bg-slate-950/70 px-3 py-2 text-xs text-slate-200">
-              <input type="checkbox" checked={showOnlyTargetNpcs} onChange={(event) => setShowOnlyTargetNpcs(event.target.checked)} />
-              NPCs com meus alvos
-            </label>
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setTierFilter("ALL")}
-              className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition ${
-                tierFilter === "ALL"
-                  ? "border-amber-300/75 bg-amber-800/40 text-amber-100"
-                  : "border-slate-700/80 bg-slate-900/70 text-slate-300 hover:border-slate-600/80"
-              }`}
-            >
-              Todos
-            </button>
-            {tiers.map((tier) => (
-              <button
-                key={tier}
-                type="button"
-                onClick={() => setTierFilter(tier)}
-                className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition ${
-                  tierFilter === tier
-                    ? "border-cyan-300/70 bg-cyan-900/45 text-cyan-100"
-                    : "border-slate-700/80 bg-slate-900/70 text-slate-300 hover:border-slate-600/80"
-                }`}
-              >
-                T{tier}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-            <div className="rounded-md border border-slate-700/70 bg-slate-950/55 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-wide text-slate-400">Tier selecionado</p>
-              <p className="text-sm font-semibold text-slate-100">
-                {tierFilter === "ALL" ? "Todos" : `Tier ${tierFilter}`} - {tierSummary.defeatedCount} derrotados
-              </p>
-            </div>
-            <div className="rounded-md border border-slate-700/70 bg-slate-950/55 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-wide text-slate-400">Tracker global</p>
-              <p className="text-sm font-semibold text-slate-100">
-                {tierSummary.obtained}/{tierSummary.totalPossible} drops
-              </p>
-            </div>
-            <div className="rounded-md border border-slate-700/70 bg-slate-950/55 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-wide text-slate-400">Conclusao</p>
-              <p className="text-sm font-semibold text-slate-100">{tierSummary.completionPercent.toFixed(1)}%</p>
-              <div className="mt-1 h-1.5 overflow-hidden rounded bg-slate-800/80">
-                <div className="h-full rounded bg-gradient-to-r from-cyan-400/80 to-emerald-400/80" style={{ width: `${tierSummary.completionPercent}%` }} />
-              </div>
-            </div>
           </div>
         </section>
 
@@ -613,7 +452,7 @@ export default function PvePage() {
         ) : filteredSortedNpcs.length === 0 ? (
           <section className="rounded-lg border border-slate-700/75 bg-slate-950/65 px-4 py-6 text-center">
             <p className="text-sm font-semibold text-slate-100">Nenhum NPC encontrado para os filtros atuais.</p>
-            <p className="mt-1 text-xs text-slate-400">Ajuste busca, tier ou toggle de alvos para continuar.</p>
+            <p className="mt-1 text-xs text-slate-400">Ajuste a busca ou ordenacao para continuar.</p>
           </section>
         ) : (
           <div className="fm-scroll max-h-[62dvh] overflow-y-auto pr-1">
@@ -622,14 +461,9 @@ export default function PvePage() {
               const tracker = dropProgressByNpcId[npc.id];
               const status = statusView(npc);
               const drops = npcDropsByNpcId[npc.id] ?? [];
-              const topDrops = pickTopDrops(drops);
               const obtainedCount = tracker?.obtainedCount ?? 0;
               const totalPossible = tracker?.totalPossible ?? drops.length;
-              const missingCount = Math.max(0, (tracker?.missingCount ?? Math.max(0, totalPossible - obtainedCount)));
               const progressPercent = totalPossible > 0 ? clampPercent((obtainedCount / totalPossible) * 100) : 0;
-              const hasTarget = drops.some((drop) => drop.target && !drop.owned);
-              const isPinned = pinnedNpcIdSet.has(npc.id);
-              const isFavorite = favoriteNpcIdSet.has(npc.id);
               const hasNewDrops = tracker ? tracker.obtainedCount > tracker.totalPossible - tracker.missingCount : false;
 
               return (
@@ -642,7 +476,7 @@ export default function PvePage() {
                         setDrawerOpen(true);
                       }}
                       className={`group relative shrink-0 overflow-hidden rounded-md border ${
-                        compactMode ? "h-24 w-20" : "h-28 w-24"
+                        compactMode ? "h-28 w-24" : "h-32 w-28"
                       } border-slate-600/75 bg-slate-900/70`}
                     >
                       <img
@@ -660,13 +494,12 @@ export default function PvePage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-100">
+                          <p className="truncate text-base font-semibold text-slate-100">
                             {npc.name}
-                            <span className="ml-1 text-[11px] text-cyan-200/90">T{npc.tier}</span>
+                            <span className="ml-1 text-xs text-cyan-200/90">T{npc.tier}</span>
                           </p>
                           <div className="mt-1 flex flex-wrap gap-1.5">
-                            <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${status.className}`}>{status.label}</span>
-                            {hasTarget ? <span className="rounded border border-amber-300/60 bg-amber-800/45 px-2 py-0.5 text-[10px] font-semibold text-amber-100">Alvos</span> : null}
+                            <span className={`rounded px-2 py-0.5 text-xs font-semibold ${status.className}`}>{status.label}</span>
                           </div>
                         </div>
 
@@ -676,63 +509,19 @@ export default function PvePage() {
                           disabled={!npc.unlocked || busyNpcId === npc.id}
                           className="fm-button shrink-0 rounded-md px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45"
                         >
-                          {busyNpcId === npc.id ? "..." : npc.unlocked ? "Duelar" : "Bloqueado"}
+                          {busyNpcId === npc.id ? "..." : npc.unlocked ? "\u2694\ufe0f Duelar" : "\ud83d\udd12 Bloqueado"}
                         </button>
                       </div>
 
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
                         <span className="rounded border border-amber-300/45 bg-amber-800/25 px-2 py-0.5 text-amber-100">{npc.rewardGold} gold</span>
-                        <span className="rounded border border-slate-600/70 bg-slate-900/70 px-2 py-0.5 text-slate-300">
-                          {obtainedCount}/{totalPossible} - faltam {missingCount}
-                        </span>
                       </div>
 
                       <div className="mt-1.5 h-1.5 overflow-hidden rounded bg-slate-800/75">
                         <div className="h-full rounded bg-gradient-to-r from-cyan-400/80 to-emerald-400/80" style={{ width: `${progressPercent}%` }} />
                       </div>
 
-                      <div className="mt-2 grid gap-1">
-                        {topDrops.map((drop) => (
-                          <button
-                            key={`${npc.id}-${drop.cardId}`}
-                            type="button"
-                            onClick={() => {
-                              setSelectedNpcId(npc.id);
-                              setDrawerOpen(true);
-                              setPreviewCardId(drop.cardId);
-                            }}
-                            className="flex items-center justify-between gap-2 rounded border border-slate-700/70 bg-slate-900/70 px-2 py-1 text-left text-[11px]"
-                          >
-                            <span className="truncate text-slate-200">{drop.name}</span>
-                            <span className={`shrink-0 ${drop.owned ? "text-emerald-200" : "text-cyan-200"}`}>
-                              {Math.round(drop.chance * 100)}%
-                            </span>
-                          </button>
-                        ))}
-                        {!topDrops.length ? <p className="text-[11px] text-slate-500">Sem drops cadastrados.</p> : null}
-                      </div>
-
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setPinnedNpcIds((current) => toggleStringValue(current, npc.id))}
-                          className={`rounded border px-2 py-0.5 text-[11px] ${
-                            isPinned ? "border-cyan-300/70 bg-cyan-900/45 text-cyan-100" : "border-slate-700/80 bg-slate-900/70 text-slate-300"
-                          }`}
-                          title="Fixar NPC no topo"
-                        >
-                          Pin
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setFavoriteNpcIds((current) => toggleStringValue(current, npc.id))}
-                          className={`rounded border px-2 py-0.5 text-[11px] ${
-                            isFavorite ? "border-amber-300/70 bg-amber-800/45 text-amber-100" : "border-slate-700/80 bg-slate-900/70 text-slate-300"
-                          }`}
-                          title="Favoritar NPC"
-                        >
-                          Fav
-                        </button>
                         <button
                           type="button"
                           onClick={() => {
@@ -788,7 +577,7 @@ export default function PvePage() {
                   disabled={!selectedNpc.unlocked || busyNpcId === selectedNpc.id}
                   className="fm-button mt-2 w-full rounded-md px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  {busyNpcId === selectedNpc.id ? "Iniciando duelo..." : selectedNpc.unlocked ? "Duelar" : "Bloqueado"}
+                  {busyNpcId === selectedNpc.id ? "Iniciando duelo..." : selectedNpc.unlocked ? "\u2694\ufe0f Duelar" : "\ud83d\udd12 Bloqueado"}
                 </button>
               </div>
             </div>
@@ -799,13 +588,10 @@ export default function PvePage() {
                 const tracker = dropProgressByNpcId[selectedNpc.id];
                 const total = tracker?.totalPossible ?? (npcDropsByNpcId[selectedNpc.id]?.length ?? 0);
                 const obtained = tracker?.obtainedCount ?? 0;
-                const missing = Math.max(0, total - obtained);
                 const percent = total > 0 ? clampPercent((obtained / total) * 100) : 0;
                 return (
                   <>
-                    <p className="mt-1 text-xs text-slate-200">
-                      {obtained}/{total} drops obtidos - faltam {missing}
-                    </p>
+                    <p className="mt-1 text-xs text-slate-200">{obtained}/{total} drops obtidos</p>
                     <div className="mt-2 h-2 overflow-hidden rounded bg-slate-800/80">
                       <div className="h-full rounded bg-gradient-to-r from-cyan-400/80 to-emerald-400/80" style={{ width: `${percent}%` }} />
                     </div>
@@ -825,7 +611,6 @@ export default function PvePage() {
                   <option value="MISSING_FIRST">Mais faltando</option>
                   <option value="RAREST_FIRST">Mais raro</option>
                   <option value="VALUE_DESC">Maior valor</option>
-                  <option value="TARGET_FIRST">Meus alvos</option>
                 </select>
               </label>
 
@@ -879,18 +664,6 @@ export default function PvePage() {
                       <span className={`rounded px-1.5 py-0.5 text-[10px] ${drop.owned ? "bg-emerald-900/45 text-emerald-200" : "bg-slate-800/75 text-slate-300"}`}>
                         {drop.owned ? "Completo" : "Faltando"}
                       </span>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setWishlistCardIds((current) => toggleStringValue(current, drop.cardId));
-                        }}
-                        className={`rounded border px-1.5 py-0.5 text-[10px] ${
-                          drop.target ? "border-amber-300/70 bg-amber-800/45 text-amber-100" : "border-slate-700/80 bg-slate-900/70 text-slate-300"
-                        }`}
-                      >
-                        {drop.target ? "Alvo" : "Marcar"}
-                      </button>
                     </div>
                   </button>
                 ))}

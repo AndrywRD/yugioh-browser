@@ -87,28 +87,57 @@ export interface PlayerAchievement {
   unlockedAt: number;
 }
 
-export type DailyMissionCategory = "PVE" | "PVP" | "SHOP" | "FUSION" | "GENERAL";
-
-export interface DailyMission {
-  key: string;
-  title: string;
-  description: string;
-  category: DailyMissionCategory;
-  target: number;
-  progress: number;
-  rewardGold: number;
-  rewardXp: number;
-  claimed: boolean;
-  missionDate: string;
-}
-
 export interface ProgressionResponse {
   player: PlayerProfile;
   levelProgress: LevelProgress;
   achievements: PlayerAchievement[];
   availableAchievements: number;
-  dailyMissions: DailyMission[];
-  missionDate: string;
+}
+
+export interface AchievementDashboardEntry {
+  key: string;
+  title: string;
+  description: string;
+  progress: number;
+  target: number;
+  completed: boolean;
+  unlocked: boolean;
+  unlockedAt: number | null;
+  rewardGold: number;
+  rewardXp: number;
+  rewardDeckSlots: number;
+  rewardTitle: string | null;
+}
+
+export interface PlayerTitleEntry {
+  name: string;
+  equipped: boolean;
+}
+
+export interface AchievementDashboardResponse {
+  player: PlayerProfile;
+  achievements: AchievementDashboardEntry[];
+  titles: PlayerTitleEntry[];
+}
+
+export interface PvpLobbyPlayer {
+  playerId: string;
+  username: string;
+  inRoom: boolean;
+  roomCode: string | null;
+}
+
+export interface PvpLobbyRoom {
+  roomCode: string;
+  hostUsername: string;
+  players: Array<{ playerId: string; username: string; online: boolean }>;
+  playerCount: number;
+  status: "LOBBY" | "RUNNING" | "FINISHED";
+}
+
+export interface PvpLobbySnapshot {
+  onlinePlayers: PvpLobbyPlayer[];
+  openRooms: PvpLobbyRoom[];
 }
 
 export function getStoredPublicId(): string | null {
@@ -287,6 +316,49 @@ export interface FusionTestResult {
   discovery: FusionDiscoveryEntry | null;
 }
 
+export type SocialPresence = "ONLINE" | "OFFLINE" | "IN_DUEL";
+
+export interface SocialUser {
+  publicId: string;
+  username: string;
+  presence: SocialPresence;
+  winsPvp: number;
+  level: number;
+}
+
+export interface SocialSnapshot {
+  users: SocialUser[];
+  friends: SocialUser[];
+  incomingRequests: SocialUser[];
+  outgoingRequests: SocialUser[];
+  unreadByFriend: Record<string, number>;
+  badgeCount: number;
+}
+
+export interface SocialMessage {
+  id: string;
+  fromPublicId: string;
+  toPublicId: string;
+  text: string;
+  createdAt: number;
+  read: boolean;
+}
+
+export interface SocialRankingEntry {
+  position: number;
+  publicId: string;
+  username: string;
+  winsPvp: number;
+  level: number;
+  online: boolean;
+  isCurrentUser: boolean;
+}
+
+export interface SocialRankingResponse {
+  global: SocialRankingEntry[];
+  friends: SocialRankingEntry[];
+}
+
 export async function registerAccount(input: { login: string; password: string; username?: string }): Promise<{ player: PlayerProfile; publicId: string }> {
   const response = await fetchWithNetworkHint("/api/auth/register", {
     method: "POST",
@@ -350,12 +422,25 @@ export async function fetchProgression(publicId: string): Promise<ProgressionRes
   return parseJsonResponse<ProgressionResponse>(response);
 }
 
-export async function claimDailyMissionReward(publicId: string, missionKey: string): Promise<ProgressionResponse> {
-  const response = await fetchWithNetworkHint(`/api/progression/missions/${encodeURIComponent(missionKey)}/claim`, {
-    method: "POST",
+export async function fetchAchievementDashboard(publicId: string): Promise<AchievementDashboardResponse> {
+  const response = await fetchWithNetworkHint("/api/achievements", {
+    method: "GET",
     headers: withPlayerHeader(publicId)
   });
-  return parseJsonResponse<ProgressionResponse>(response);
+  return parseJsonResponse<AchievementDashboardResponse>(response);
+}
+
+export async function equipPlayerTitle(publicId: string, title: string | null): Promise<PlayerProfile> {
+  const response = await fetchWithNetworkHint("/api/player/title", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...withPlayerHeader(publicId)
+    },
+    body: JSON.stringify({ title })
+  });
+  const payload = await parseJsonResponse<{ player: PlayerProfile }>(response);
+  return payload.player;
 }
 
 export async function resetPlayerProgress(publicId: string): Promise<{ player: PlayerProfile; decks: DeckListResponse }> {
@@ -484,6 +569,14 @@ export async function fetchPveDropProgress(publicId: string): Promise<PveDropPro
   return payload.progress;
 }
 
+export async function fetchPvpLobby(publicId: string): Promise<PvpLobbySnapshot> {
+  const response = await fetchWithNetworkHint("/api/pvp/lobby", {
+    method: "GET",
+    headers: withPlayerHeader(publicId)
+  });
+  return parseJsonResponse<PvpLobbySnapshot>(response);
+}
+
 export async function startPveMatch(publicId: string, npcId: string): Promise<{ roomCode: string; npc: { id: string; name: string; tier: number } }> {
   const response = await fetchWithNetworkHint("/api/pve/start", {
     method: "POST",
@@ -541,4 +634,112 @@ export async function testFusion(
     body: JSON.stringify({ materials })
   });
   return parseJsonResponse<FusionTestResult>(response);
+}
+
+export async function fetchSocialSnapshot(publicId: string): Promise<SocialSnapshot> {
+  const response = await fetchWithNetworkHint("/api/social/snapshot", {
+    method: "GET",
+    headers: withPlayerHeader(publicId)
+  });
+  return parseJsonResponse<SocialSnapshot>(response);
+}
+
+export async function searchSocialPlayers(publicId: string, query: string, limit = 24): Promise<SocialUser[]> {
+  const response = await fetchWithNetworkHint(
+    `/api/social/search?q=${encodeURIComponent(query)}&limit=${encodeURIComponent(String(limit))}`,
+    {
+      method: "GET",
+      headers: withPlayerHeader(publicId)
+    }
+  );
+  const payload = await parseJsonResponse<{ users: SocialUser[] }>(response);
+  return payload.users;
+}
+
+export async function sendSocialFriendRequest(publicId: string, targetPublicId: string): Promise<SocialSnapshot> {
+  const response = await fetchWithNetworkHint("/api/social/requests", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...withPlayerHeader(publicId)
+    },
+    body: JSON.stringify({ targetPublicId })
+  });
+  const payload = await parseJsonResponse<{ snapshot: SocialSnapshot }>(response);
+  return payload.snapshot;
+}
+
+export async function acceptSocialFriendRequest(publicId: string, requesterPublicId: string): Promise<SocialSnapshot> {
+  const response = await fetchWithNetworkHint(`/api/social/requests/${encodeURIComponent(requesterPublicId)}/accept`, {
+    method: "POST",
+    headers: withPlayerHeader(publicId)
+  });
+  const payload = await parseJsonResponse<{ snapshot: SocialSnapshot }>(response);
+  return payload.snapshot;
+}
+
+export async function declineSocialFriendRequest(publicId: string, requesterPublicId: string): Promise<SocialSnapshot> {
+  const response = await fetchWithNetworkHint(`/api/social/requests/${encodeURIComponent(requesterPublicId)}/reject`, {
+    method: "POST",
+    headers: withPlayerHeader(publicId)
+  });
+  const payload = await parseJsonResponse<{ snapshot: SocialSnapshot }>(response);
+  return payload.snapshot;
+}
+
+export async function cancelSocialFriendRequest(publicId: string, targetPublicId: string): Promise<SocialSnapshot> {
+  const response = await fetchWithNetworkHint(`/api/social/requests/${encodeURIComponent(targetPublicId)}`, {
+    method: "DELETE",
+    headers: withPlayerHeader(publicId)
+  });
+  const payload = await parseJsonResponse<{ snapshot: SocialSnapshot }>(response);
+  return payload.snapshot;
+}
+
+export async function removeSocialFriend(publicId: string, friendPublicId: string): Promise<SocialSnapshot> {
+  const response = await fetchWithNetworkHint(`/api/social/friends/${encodeURIComponent(friendPublicId)}`, {
+    method: "DELETE",
+    headers: withPlayerHeader(publicId)
+  });
+  const payload = await parseJsonResponse<{ snapshot: SocialSnapshot }>(response);
+  return payload.snapshot;
+}
+
+export async function fetchSocialConversation(publicId: string, friendPublicId: string): Promise<SocialMessage[]> {
+  const response = await fetchWithNetworkHint(`/api/social/conversations/${encodeURIComponent(friendPublicId)}`, {
+    method: "GET",
+    headers: withPlayerHeader(publicId)
+  });
+  const payload = await parseJsonResponse<{ messages: SocialMessage[] }>(response);
+  return payload.messages;
+}
+
+export async function sendSocialMessage(publicId: string, friendPublicId: string, text: string): Promise<SocialMessage[]> {
+  const response = await fetchWithNetworkHint(`/api/social/conversations/${encodeURIComponent(friendPublicId)}/messages`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...withPlayerHeader(publicId)
+    },
+    body: JSON.stringify({ text })
+  });
+  const payload = await parseJsonResponse<{ messages: SocialMessage[] }>(response);
+  return payload.messages;
+}
+
+export async function markSocialConversationRead(publicId: string, friendPublicId: string): Promise<SocialSnapshot> {
+  const response = await fetchWithNetworkHint(`/api/social/conversations/${encodeURIComponent(friendPublicId)}/read`, {
+    method: "POST",
+    headers: withPlayerHeader(publicId)
+  });
+  const payload = await parseJsonResponse<{ snapshot: SocialSnapshot }>(response);
+  return payload.snapshot;
+}
+
+export async function fetchSocialRanking(publicId: string): Promise<SocialRankingResponse> {
+  const response = await fetchWithNetworkHint("/api/social/ranking", {
+    method: "GET",
+    headers: withPlayerHeader(publicId)
+  });
+  return parseJsonResponse<SocialRankingResponse>(response);
 }

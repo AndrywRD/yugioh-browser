@@ -1,7 +1,7 @@
 import type { Deck } from "@ruptura-arcana/shared";
 import type { PlayerProfile, PveNpc } from "../../lib/api";
 
-export type LobbySection = "CAMPAIGN" | "ONLINE" | "COLLECTION" | "PROFILE";
+export type LobbySection = "CAMPAIGN" | "ONLINE" | "COLLECTION" | "FRIENDS" | "RANKING" | "PROFILE";
 
 export interface LobbyProfileSummary {
   player: PlayerProfile;

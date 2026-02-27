@@ -113,6 +113,25 @@ export default function FusionLogPage() {
     return Array.from(tagSet).sort((a, b) => a.localeCompare(b));
   }, [discoveries]);
 
+  const fusionSummary = useMemo(() => {
+    const uniqueResults = new Set(discoveries.map((item) => item.resultCardId)).size;
+    const totalAttemptsRecorded = discoveries.reduce((acc, item) => acc + Math.max(1, item.times), 0);
+    const avgMaterials =
+      discoveries.length > 0
+        ? discoveries.reduce((acc, item) => acc + item.materialsCount, 0) / discoveries.length
+        : 0;
+    const latest = discoveries.reduce<FusionDiscoveryEntry | null>((current, item) => {
+      if (!current) return item;
+      return item.discoveredAt > current.discoveredAt ? item : current;
+    }, null);
+    return {
+      uniqueResults,
+      totalAttemptsRecorded,
+      avgMaterials,
+      latest
+    };
+  }, [discoveries]);
+
   const updateLabSlot = (slotIndex: 0 | 1 | 2, value: string) => {
     setLabSlots((current) => {
       const next: [string, string, string] = [...current] as [string, string, string];
@@ -406,7 +425,6 @@ export default function FusionLogPage() {
 
         {!loading && (
           <section className="fm-panel rounded-xl p-4">
-            <p className="mb-3 text-xs text-slate-400">Mostrando {filteredDiscoveries.length} fusoes.</p>
             <div className="fm-scroll h-[48vh] overflow-y-scroll pr-1">
               {filteredDiscoveries.length === 0 ? (
                 <p className="rounded border border-slate-700 bg-slate-950/70 p-3 text-sm text-slate-300">Nenhuma fusao encontrada com os filtros atuais.</p>

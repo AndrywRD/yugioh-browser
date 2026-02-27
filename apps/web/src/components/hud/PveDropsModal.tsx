@@ -50,7 +50,6 @@ export function PveDropsModal({
           <h2 className={`text-2xl font-black uppercase tracking-[0.12em] ${didWin ? "text-amber-200" : "text-rose-300"}`}>
             {didWin ? "Recompensas PVE" : "Derrota PVE"}
           </h2>
-          <p className="mt-1 text-xs font-medium text-slate-200 [text-shadow:0_1px_2px_rgba(0,0,0,0.92)]">NPC: {npcId}</p>
           {didWin ? (
             <p className="mt-1 text-sm font-semibold text-emerald-200 [text-shadow:0_1px_2px_rgba(0,0,0,0.92)]">Gold recebido: +{rewardGold}</p>
           ) : (
@@ -63,6 +62,15 @@ export function PveDropsModal({
             <ul className="space-y-2">
               {rewardCards.map((drop, index) => {
                 const card = CARD_INDEX[drop.cardId];
+                const isMonster = card?.kind === "MONSTER";
+                const isSpell = card?.kind === "SPELL";
+                const typeLabel = isMonster
+                  ? `ATK/DEF: ${card?.atk ?? 0}/${card?.def ?? 0}`
+                  : isSpell
+                    ? card?.effectKey?.startsWith("EQUIP")
+                      ? "SPELL EQUIP"
+                      : "SPELL"
+                    : "TRAP";
                 return (
                   <li key={`${drop.cardId}-${index}`} className="flex items-center gap-3 rounded-lg border border-slate-600/90 bg-slate-900/85 p-2">
                     <div className="h-16 w-12 shrink-0 overflow-hidden rounded border border-slate-600 bg-slate-950">
@@ -74,7 +82,7 @@ export function PveDropsModal({
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold text-slate-100 [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">{card?.name ?? drop.cardId}</p>
-                      <p className="text-[11px] font-medium text-slate-300">{drop.cardId}</p>
+                      <p className="text-[11px] font-medium text-slate-300">{typeLabel}</p>
                     </div>
                     <span className="rounded bg-amber-800/70 px-2 py-1 text-xs font-semibold text-amber-100">x{drop.count}</span>
                   </li>

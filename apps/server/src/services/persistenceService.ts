@@ -16,15 +16,11 @@ import { buildFmNpcCatalog, type FmNpcDefinition, type NpcRewardDrop, type Unloc
 import {
   ACHIEVEMENT_CATALOG,
   BASE_DECK_SLOT_LIMIT,
-  DAILY_MISSION_CATALOG,
-  buildDailyMissionSet,
   buildLevelProgress,
   levelFromXp,
   resolveAchievementProgress,
-  type DailyMissionCategory,
   type LevelProgressView,
   type PlayerProgressMetrics,
-  type ProgressEventKey,
   xpRewardForPveLoss,
   xpRewardForPveWin,
   xpRewardForPvpLoss,
@@ -73,26 +69,37 @@ type PlayerAchievementView = {
   unlockedAt: number;
 };
 
-type PlayerDailyMissionView = {
-  key: string;
-  title: string;
-  description: string;
-  category: DailyMissionCategory;
-  target: number;
-  progress: number;
-  rewardGold: number;
-  rewardXp: number;
-  claimed: boolean;
-  missionDate: string;
-};
-
 type ProgressionSummary = {
   player: PlayerSummary;
   levelProgress: LevelProgressView;
   achievements: PlayerAchievementView[];
   availableAchievements: number;
-  dailyMissions: PlayerDailyMissionView[];
-  missionDate: string;
+};
+
+type AchievementDashboardEntry = {
+  key: string;
+  title: string;
+  description: string;
+  progress: number;
+  target: number;
+  completed: boolean;
+  unlocked: boolean;
+  unlockedAt: number | null;
+  rewardGold: number;
+  rewardXp: number;
+  rewardDeckSlots: number;
+  rewardTitle: string | null;
+};
+
+type PlayerTitleView = {
+  name: string;
+  equipped: boolean;
+};
+
+type AchievementDashboardSummary = {
+  player: PlayerSummary;
+  achievements: AchievementDashboardEntry[];
+  titles: PlayerTitleView[];
 };
 
 type DeckListSummary = {
@@ -241,6 +248,49 @@ type FusionTestSummary = {
     fallbackType?: "FALLBACK_WEAK" | "FALLBACK_LOCKED";
   };
   discovery: FusionDiscoveryView | null;
+};
+
+type SocialPresence = "ONLINE" | "OFFLINE" | "IN_DUEL";
+
+type SocialUserView = {
+  publicId: string;
+  username: string;
+  presence: SocialPresence;
+  winsPvp: number;
+  level: number;
+};
+
+type SocialSnapshotSummary = {
+  users: SocialUserView[];
+  friends: SocialUserView[];
+  incomingRequests: SocialUserView[];
+  outgoingRequests: SocialUserView[];
+  unreadByFriend: Record<string, number>;
+  badgeCount: number;
+};
+
+type SocialMessageView = {
+  id: string;
+  fromPublicId: string;
+  toPublicId: string;
+  text: string;
+  createdAt: number;
+  read: boolean;
+};
+
+type SocialRankingEntry = {
+  position: number;
+  publicId: string;
+  username: string;
+  winsPvp: number;
+  level: number;
+  online: boolean;
+  isCurrentUser: boolean;
+};
+
+type SocialRankingSummary = {
+  global: SocialRankingEntry[];
+  friends: SocialRankingEntry[];
 };
 
 function toCardKind(kind: string): "MONSTER" | "SPELL" | "TRAP" {
@@ -718,10 +768,6 @@ const BOOSTER_CARD_XP_GAIN = 12;
 const FUSION_DISCOVERY_XP_GAIN = 68;
 const FUSION_REPEAT_XP_GAIN = 0;
 
-function buildMissionDate(now = Date.now()): string {
-  return new Date(now).toISOString().slice(0, 10);
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -919,7 +965,6 @@ export class PersistenceService {
   private readonly fmNpcs: FmNpcDefinition[];
   private readonly missingNpcCards: string[];
   private readonly tierRewardPools: Map<number, NpcRewardDrop[]>;
-  private readonly dailyMissionCatalogByKey = new Map(DAILY_MISSION_CATALOG.map((mission) => [mission.key, mission]));
 
   constructor(private readonly prisma: PrismaClient) {
     const fmBuild = buildFmNpcCatalog();
@@ -946,69 +991,6 @@ export class PersistenceService {
         cost: pack.cost,
         cards: pack.cards
       }))
-    };
-  }
-
-  private async ensureDailyMissionsForPlayer(
-    tx: Prisma.TransactionClient,
-    playerId: string,
-    missionDate = buildMissionDate()
-  ) {
-    const existing = await tx.playerDailyMission.findMany({
-      where: {
-        playerId,
-        missionDate
-      }
-    });
-
-    const existingByKey = new Map(existing.map((mission) => [mission.missionKey, mission]));
-    const missionSet = buildDailyMissionSet(playerId, missionDate);
-
-    for (const definition of missionSet) {
-      if (existingByKey.has(definition.key)) continue;
-      const created = await tx.playerDailyMission.create({
-        data: {
-          playerId,
-          missionDate,
-          missionKey: definition.key,
-          title: definition.title,
-          description: definition.description,
-          category: definition.category,
-          target: definition.target,
-          progress: 0,
-          rewardGold: definition.rewardGold,
-          rewardXp: definition.rewardXp
-        }
-      });
-      existingByKey.set(created.missionKey, created);
-    }
-
-    return Array.from(existingByKey.values()).sort((left, right) => left.missionKey.localeCompare(right.missionKey));
-  }
-
-  private toDailyMissionView(row: {
-    missionKey: string;
-    title: string;
-    description: string;
-    category: string;
-    target: number;
-    progress: number;
-    rewardGold: number;
-    rewardXp: number;
-    claimedAt: Date | null;
-    missionDate: string;
-  }): PlayerDailyMissionView {
-    return {
-      key: row.missionKey,
-      title: row.title,
-      description: row.description,
-      category: (row.category as DailyMissionCategory) ?? "GENERAL",
-      target: row.target,
-      progress: Math.min(row.target, Math.max(0, row.progress)),
-      rewardGold: row.rewardGold,
-      rewardXp: row.rewardXp,
-      claimed: Boolean(row.claimedAt),
-      missionDate: row.missionDate
     };
   }
 
@@ -1086,33 +1068,6 @@ export class PersistenceService {
       levelBefore: player.level,
       levelAfter: computedLevel
     };
-  }
-
-  private async appendDailyMissionProgress(
-    tx: Prisma.TransactionClient,
-    playerId: string,
-    eventKey: ProgressEventKey,
-    amount = 1
-  ): Promise<void> {
-    const normalizedAmount = Math.max(0, Math.floor(amount));
-    if (normalizedAmount <= 0) return;
-    const missionDate = buildMissionDate();
-    const missions = await this.ensureDailyMissionsForPlayer(tx, playerId, missionDate);
-
-    for (const mission of missions) {
-      if (mission.claimedAt) continue;
-      const definition = this.dailyMissionCatalogByKey.get(mission.missionKey);
-      if (!definition || definition.eventKey !== eventKey) continue;
-      if (mission.progress >= mission.target) continue;
-
-      const nextProgress = Math.min(mission.target, mission.progress + normalizedAmount);
-      await tx.playerDailyMission.update({
-        where: { id: mission.id },
-        data: {
-          progress: nextProgress
-        }
-      });
-    }
   }
 
   private async buildProgressMetrics(tx: Prisma.TransactionClient, playerId: string): Promise<PlayerProgressMetrics> {
@@ -1224,21 +1179,11 @@ export class PersistenceService {
     return newlyUnlocked;
   }
 
-  private async applyProgressEvents(
-    tx: Prisma.TransactionClient,
-    playerId: string,
-    events: Array<{ key: ProgressEventKey; amount?: number }>
-  ): Promise<void> {
-    for (const event of events) {
-      await this.appendDailyMissionProgress(tx, playerId, event.key, event.amount ?? 1);
-    }
-  }
-
   private async buildProgressionSummaryByPlayerId(
     tx: Prisma.TransactionClient,
     playerId: string
   ): Promise<ProgressionSummary> {
-    const [player, achievements, dailyMissionRows] = await Promise.all([
+    const [player, achievements] = await Promise.all([
       tx.player.findUnique({
         where: { id: playerId },
         select: {
@@ -1259,8 +1204,7 @@ export class PersistenceService {
       tx.playerAchievement.findMany({
         where: { playerId },
         orderBy: [{ unlockedAt: "desc" }, { title: "asc" }]
-      }),
-      this.ensureDailyMissionsForPlayer(tx, playerId, buildMissionDate())
+      })
     ]);
 
     if (!player) {
@@ -1271,9 +1215,7 @@ export class PersistenceService {
       player: this.toPlayerSummary(player),
       levelProgress: buildLevelProgress(player.xp, player.lifetimeXp),
       achievements: achievements.map((row) => this.toAchievementView(row)),
-      availableAchievements: ACHIEVEMENT_CATALOG.length,
-      dailyMissions: dailyMissionRows.map((row) => this.toDailyMissionView(row)),
-      missionDate: buildMissionDate()
+      availableAchievements: ACHIEVEMENT_CATALOG.length
     };
   }
 
@@ -1707,9 +1649,6 @@ export class PersistenceService {
       await tx.playerAchievement.deleteMany({
         where: { playerId: player.id }
       });
-      await tx.playerDailyMission.deleteMany({
-        where: { playerId: player.id }
-      });
       await tx.playerCard.deleteMany({
         where: { playerId: player.id }
       });
@@ -1792,55 +1731,118 @@ export class PersistenceService {
     return this.prisma.$transaction((tx) => this.buildProgressionSummaryByPlayerId(tx, playerId));
   }
 
-  async claimDailyMission(publicId: string, missionKey: string): Promise<ProgressionSummary> {
+  async getAchievementDashboard(publicId: string): Promise<AchievementDashboardSummary> {
     const playerId = await this.resolvePlayerId(publicId);
-    const normalizedKey = String(missionKey ?? "").trim();
-    if (!normalizedKey) {
-      throw new Error("missionKey obrigatorio.");
-    }
+    return this.prisma.$transaction(async (tx) => {
+      const [player, metrics, unlockedRows] = await Promise.all([
+        tx.player.findUnique({
+          where: { id: playerId }
+        }),
+        this.buildProgressMetrics(tx, playerId),
+        tx.playerAchievement.findMany({
+          where: { playerId },
+          select: {
+            achievementKey: true,
+            rewardTitle: true,
+            unlockedAt: true
+          }
+        })
+      ]);
+
+      if (!player) {
+        throw new Error("Player nao encontrado.");
+      }
+
+      const unlockedByKey = new Map(
+        unlockedRows.map((row) => [row.achievementKey, row] as const)
+      );
+
+      const achievements = ACHIEVEMENT_CATALOG.map<AchievementDashboardEntry>((achievement) => {
+        const unlockedRow = unlockedByKey.get(achievement.key);
+        const progress = resolveAchievementProgress(achievement.requirement, metrics);
+        return {
+          key: achievement.key,
+          title: achievement.title,
+          description: achievement.description,
+          progress: Math.min(progress, achievement.requirement.target),
+          target: achievement.requirement.target,
+          completed: progress >= achievement.requirement.target,
+          unlocked: Boolean(unlockedRow),
+          unlockedAt: unlockedRow?.unlockedAt ? unlockedRow.unlockedAt.getTime() : null,
+          rewardGold: achievement.rewardGold,
+          rewardXp: achievement.rewardXp,
+          rewardDeckSlots: achievement.rewardDeckSlots ?? 0,
+          rewardTitle: achievement.rewardTitle ?? null
+        };
+      });
+
+      const titleSet = new Set<string>();
+      for (const row of unlockedRows) {
+        if (row.rewardTitle) {
+          titleSet.add(row.rewardTitle);
+        }
+      }
+      if (player.activeTitle) {
+        titleSet.add(player.activeTitle);
+      }
+
+      const titles = Array.from(titleSet)
+        .sort((left, right) => left.localeCompare(right))
+        .map<PlayerTitleView>((name) => ({
+          name,
+          equipped: name === player.activeTitle
+        }));
+
+      return {
+        player: this.toPlayerSummary(player),
+        achievements,
+        titles
+      };
+    });
+  }
+
+  async equipPlayerTitle(publicId: string, title: string | null): Promise<PlayerSummary> {
+    const normalizedTitle = String(title ?? "").trim();
 
     return this.prisma.$transaction(async (tx) => {
-      const missionDate = buildMissionDate();
-      await this.ensureDailyMissionsForPlayer(tx, playerId, missionDate);
+      const player = await tx.player.findUnique({
+        where: { publicId }
+      });
+      if (!player) {
+        throw new Error("Player nao encontrado.");
+      }
 
-      const mission = await tx.playerDailyMission.findFirst({
+      if (!normalizedTitle) {
+        const updated = await tx.player.update({
+          where: { id: player.id },
+          data: {
+            activeTitle: null,
+            lastSeenAt: new Date()
+          }
+        });
+        return this.toPlayerSummary(updated);
+      }
+
+      const unlocked = await tx.playerAchievement.findFirst({
         where: {
-          playerId,
-          missionDate,
-          missionKey: normalizedKey
-        }
-      });
-      if (!mission) {
-        throw new Error("Missao nao encontrada para hoje.");
-      }
-      if (mission.claimedAt) {
-        throw new Error("Missao ja resgatada.");
-      }
-      if (mission.progress < mission.target) {
-        throw new Error("Missao ainda nao concluida.");
-      }
-
-      await tx.playerDailyMission.update({
-        where: { id: mission.id },
-        data: {
-          claimedAt: new Date()
-        }
+          playerId: player.id,
+          rewardTitle: normalizedTitle
+        },
+        select: { id: true }
       });
 
-      await tx.player.update({
-        where: { id: playerId },
+      if (!unlocked) {
+        throw new Error("Titulo nao desbloqueado para esta conta.");
+      }
+
+      const updated = await tx.player.update({
+        where: { id: player.id },
         data: {
-          gold: { increment: mission.rewardGold },
+          activeTitle: normalizedTitle,
           lastSeenAt: new Date()
         }
       });
-
-      if (mission.rewardXp > 0) {
-        await this.grantXp(tx, playerId, mission.rewardXp);
-      }
-
-      await this.evaluateAchievements(tx, playerId);
-      return this.buildProgressionSummaryByPlayerId(tx, playerId);
+      return this.toPlayerSummary(updated);
     });
   }
 
@@ -1866,6 +1868,583 @@ export class PersistenceService {
       throw new Error("Player nao encontrado.");
     }
     return player.id;
+  }
+
+  private normalizeFriendPair(playerAId: string, playerBId: string): { playerAId: string; playerBId: string } {
+    return playerAId < playerBId ? { playerAId, playerBId } : { playerAId: playerBId, playerBId: playerAId };
+  }
+
+  private toSocialPresence(publicId: string, onlinePlayerIds: ReadonlySet<string>, lastSeenAt?: Date | null): SocialPresence {
+    if (onlinePlayerIds.has(publicId)) return "ONLINE";
+    if (lastSeenAt && Date.now() - lastSeenAt.getTime() <= 90_000) return "ONLINE";
+    return "OFFLINE";
+  }
+
+  private toSocialUserView(
+    row: { publicId: string; username: string; winsPvp: number; level: number; lastSeenAt?: Date | null },
+    onlinePlayerIds: ReadonlySet<string>
+  ): SocialUserView {
+    return {
+      publicId: row.publicId,
+      username: row.username,
+      presence: this.toSocialPresence(row.publicId, onlinePlayerIds, row.lastSeenAt),
+      winsPvp: row.winsPvp,
+      level: row.level
+    };
+  }
+
+  private sortSocialUsers(users: SocialUserView[]): SocialUserView[] {
+    const presenceWeight = (presence: SocialPresence): number => {
+      if (presence === "ONLINE") return 0;
+      if (presence === "IN_DUEL") return 1;
+      return 2;
+    };
+    return [...users].sort((left, right) => {
+      const presenceDelta = presenceWeight(left.presence) - presenceWeight(right.presence);
+      if (presenceDelta !== 0) return presenceDelta;
+      return left.username.localeCompare(right.username);
+    });
+  }
+
+  private async resolvePlayerByPublicId(publicId: string): Promise<{
+    id: string;
+    publicId: string;
+    username: string;
+    winsPvp: number;
+    level: number;
+    lastSeenAt: Date;
+  }> {
+    const player = await this.prisma.player.findUnique({
+      where: { publicId },
+      select: {
+        id: true,
+        publicId: true,
+        username: true,
+        winsPvp: true,
+        level: true,
+        lastSeenAt: true
+      }
+    });
+    if (!player) {
+      throw new Error("Player nao encontrado.");
+    }
+    return player;
+  }
+
+  private async ensureFriendshipByIds(playerAId: string, playerBId: string): Promise<void> {
+    const pair = this.normalizeFriendPair(playerAId, playerBId);
+    const friendship = await this.prisma.friendship.findUnique({
+      where: {
+        playerAId_playerBId: pair
+      },
+      select: { id: true }
+    });
+    if (!friendship) {
+      throw new Error("Este jogador nao esta na sua lista de amigos.");
+    }
+  }
+
+  async getSocialSnapshot(publicId: string, onlinePlayerIds: ReadonlySet<string>): Promise<SocialSnapshotSummary> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    await this.prisma.player.update({
+      where: { id: current.id },
+      data: { lastSeenAt: new Date() }
+    });
+
+    const [friendships, incomingRows, outgoingRows, unreadRows] = await Promise.all([
+      this.prisma.friendship.findMany({
+        where: {
+          OR: [{ playerAId: current.id }, { playerBId: current.id }]
+        },
+        include: {
+          playerA: {
+            select: { id: true, publicId: true, username: true, winsPvp: true, level: true, lastSeenAt: true }
+          },
+          playerB: {
+            select: { id: true, publicId: true, username: true, winsPvp: true, level: true, lastSeenAt: true }
+          }
+        },
+        orderBy: {
+          createdAt: "desc"
+        }
+      }),
+      this.prisma.friendRequest.findMany({
+        where: {
+          receiverId: current.id,
+          status: "PENDING"
+        },
+        include: {
+          sender: {
+            select: { publicId: true, username: true, winsPvp: true, level: true, lastSeenAt: true }
+          }
+        },
+        orderBy: {
+          createdAt: "desc"
+        }
+      }),
+      this.prisma.friendRequest.findMany({
+        where: {
+          senderId: current.id,
+          status: "PENDING"
+        },
+        include: {
+          receiver: {
+            select: { publicId: true, username: true, winsPvp: true, level: true, lastSeenAt: true }
+          }
+        },
+        orderBy: {
+          createdAt: "desc"
+        }
+      }),
+      this.prisma.friendMessage.groupBy({
+        by: ["senderId"],
+        where: {
+          receiverId: current.id,
+          readAt: null
+        },
+        _count: {
+          _all: true
+        }
+      })
+    ]);
+
+    const friendRows = friendships.map((item) => (item.playerAId === current.id ? item.playerB : item.playerA));
+    const friendPublicIds = new Set(friendRows.map((item) => item.publicId));
+    const incomingPublicIds = new Set(incomingRows.map((item) => item.sender.publicId));
+    const outgoingPublicIds = new Set(outgoingRows.map((item) => item.receiver.publicId));
+
+    const blockedPublicIds = new Set<string>([
+      current.publicId,
+      ...friendPublicIds,
+      ...incomingPublicIds,
+      ...outgoingPublicIds
+    ]);
+
+    const candidates = await this.prisma.player.findMany({
+      where: {
+        publicId: {
+          notIn: Array.from(blockedPublicIds)
+        }
+      },
+      select: {
+        publicId: true,
+        username: true,
+        winsPvp: true,
+        level: true,
+        lastSeenAt: true
+      },
+      orderBy: [{ lastSeenAt: "desc" }, { winsPvp: "desc" }, { username: "asc" }],
+      take: 48
+    });
+
+    const senderIds = unreadRows.map((row) => row.senderId);
+    const unreadSenderRows = senderIds.length
+      ? await this.prisma.player.findMany({
+          where: {
+            id: { in: senderIds }
+          },
+          select: {
+            id: true,
+            publicId: true
+          }
+        })
+      : [];
+    const senderIdToPublicId = new Map(unreadSenderRows.map((row) => [row.id, row.publicId]));
+    const unreadByFriend = unreadRows.reduce<Record<string, number>>((acc, row) => {
+      const senderPublicId = senderIdToPublicId.get(row.senderId);
+      if (!senderPublicId) return acc;
+      acc[senderPublicId] = row._count._all;
+      return acc;
+    }, {});
+
+    const friends = this.sortSocialUsers(friendRows.map((row) => this.toSocialUserView(row, onlinePlayerIds)));
+    const incomingRequests = this.sortSocialUsers(incomingRows.map((row) => this.toSocialUserView(row.sender, onlinePlayerIds)));
+    const outgoingRequests = this.sortSocialUsers(outgoingRows.map((row) => this.toSocialUserView(row.receiver, onlinePlayerIds)));
+    const users = this.sortSocialUsers(candidates.map((row) => this.toSocialUserView(row, onlinePlayerIds)));
+
+    const unreadCount = Object.values(unreadByFriend).reduce((sum, value) => sum + Math.max(0, value), 0);
+    const badgeCount = incomingRequests.length + unreadCount;
+
+    return {
+      users,
+      friends,
+      incomingRequests,
+      outgoingRequests,
+      unreadByFriend,
+      badgeCount
+    };
+  }
+
+  async searchSocialPlayers(
+    publicId: string,
+    query: string,
+    onlinePlayerIds: ReadonlySet<string>,
+    limit = 24
+  ): Promise<SocialUserView[]> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    await this.prisma.player.update({
+      where: { id: current.id },
+      data: { lastSeenAt: new Date() }
+    });
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) return [];
+
+    const [friendships, incomingRows, outgoingRows] = await Promise.all([
+      this.prisma.friendship.findMany({
+        where: {
+          OR: [{ playerAId: current.id }, { playerBId: current.id }]
+        },
+        select: {
+          playerAId: true,
+          playerBId: true,
+          playerA: { select: { publicId: true } },
+          playerB: { select: { publicId: true } }
+        }
+      }),
+      this.prisma.friendRequest.findMany({
+        where: {
+          receiverId: current.id,
+          status: "PENDING"
+        },
+        select: {
+          sender: {
+            select: { publicId: true }
+          }
+        }
+      }),
+      this.prisma.friendRequest.findMany({
+        where: {
+          senderId: current.id,
+          status: "PENDING"
+        },
+        select: {
+          receiver: {
+            select: { publicId: true }
+          }
+        }
+      })
+    ]);
+
+    const blockedPublicIds = new Set<string>([
+      current.publicId,
+      ...friendships.map((row) => (row.playerAId === current.id ? row.playerB.publicId : row.playerA.publicId)),
+      ...incomingRows.map((row) => row.sender.publicId),
+      ...outgoingRows.map((row) => row.receiver.publicId)
+    ]);
+
+    const rows = await this.prisma.player.findMany({
+      where: {
+        username: {
+          contains: normalizedQuery,
+          mode: "insensitive"
+        },
+        publicId: {
+          notIn: Array.from(blockedPublicIds)
+        }
+      },
+      select: {
+        publicId: true,
+        username: true,
+        winsPvp: true,
+        level: true,
+        lastSeenAt: true
+      },
+      orderBy: [{ winsPvp: "desc" }, { level: "desc" }, { username: "asc" }],
+      take: Math.max(1, Math.min(50, Math.floor(limit)))
+    });
+
+    return this.sortSocialUsers(rows.map((row) => this.toSocialUserView(row, onlinePlayerIds)));
+  }
+
+  async sendFriendRequest(publicId: string, targetPublicId: string): Promise<void> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    const target = await this.resolvePlayerByPublicId(targetPublicId);
+
+    if (current.id === target.id) {
+      throw new Error("Nao e possivel adicionar a si mesmo.");
+    }
+
+    const pair = this.normalizeFriendPair(current.id, target.id);
+    const existingFriendship = await this.prisma.friendship.findUnique({
+      where: {
+        playerAId_playerBId: pair
+      },
+      select: { id: true }
+    });
+    if (existingFriendship) {
+      throw new Error("Este jogador ja esta na sua lista de amigos.");
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const inversePending = await tx.friendRequest.findUnique({
+        where: {
+          senderId_receiverId: {
+            senderId: target.id,
+            receiverId: current.id
+          }
+        }
+      });
+
+      if (inversePending && inversePending.status === "PENDING") {
+        await tx.friendship.upsert({
+          where: {
+            playerAId_playerBId: pair
+          },
+          create: pair,
+          update: {}
+        });
+        await tx.friendRequest.deleteMany({
+          where: {
+            OR: [
+              { senderId: current.id, receiverId: target.id },
+              { senderId: target.id, receiverId: current.id }
+            ]
+          }
+        });
+        return;
+      }
+
+      await tx.friendRequest.upsert({
+        where: {
+          senderId_receiverId: {
+            senderId: current.id,
+            receiverId: target.id
+          }
+        },
+        create: {
+          senderId: current.id,
+          receiverId: target.id,
+          status: "PENDING"
+        },
+        update: {
+          status: "PENDING"
+        }
+      });
+    });
+  }
+
+  async acceptFriendRequest(publicId: string, requesterPublicId: string): Promise<void> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    const requester = await this.resolvePlayerByPublicId(requesterPublicId);
+    if (current.id === requester.id) {
+      throw new Error("Solicitacao invalida.");
+    }
+
+    const pair = this.normalizeFriendPair(current.id, requester.id);
+    await this.prisma.$transaction(async (tx) => {
+      const pending = await tx.friendRequest.findUnique({
+        where: {
+          senderId_receiverId: {
+            senderId: requester.id,
+            receiverId: current.id
+          }
+        }
+      });
+      if (!pending || pending.status !== "PENDING") {
+        throw new Error("Solicitacao nao encontrada.");
+      }
+
+      await tx.friendship.upsert({
+        where: {
+          playerAId_playerBId: pair
+        },
+        create: pair,
+        update: {}
+      });
+      await tx.friendRequest.deleteMany({
+        where: {
+          OR: [
+            { senderId: current.id, receiverId: requester.id },
+            { senderId: requester.id, receiverId: current.id }
+          ]
+        }
+      });
+    });
+  }
+
+  async declineFriendRequest(publicId: string, requesterPublicId: string): Promise<void> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    const requester = await this.resolvePlayerByPublicId(requesterPublicId);
+    await this.prisma.friendRequest.deleteMany({
+      where: {
+        senderId: requester.id,
+        receiverId: current.id,
+        status: "PENDING"
+      }
+    });
+  }
+
+  async cancelFriendRequest(publicId: string, targetPublicId: string): Promise<void> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    const target = await this.resolvePlayerByPublicId(targetPublicId);
+    await this.prisma.friendRequest.deleteMany({
+      where: {
+        senderId: current.id,
+        receiverId: target.id,
+        status: "PENDING"
+      }
+    });
+  }
+
+  async removeFriend(publicId: string, friendPublicId: string): Promise<void> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    const friend = await this.resolvePlayerByPublicId(friendPublicId);
+    if (current.id === friend.id) return;
+
+    const pair = this.normalizeFriendPair(current.id, friend.id);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.friendship.deleteMany({
+        where: {
+          playerAId: pair.playerAId,
+          playerBId: pair.playerBId
+        }
+      });
+      await tx.friendRequest.deleteMany({
+        where: {
+          OR: [
+            { senderId: current.id, receiverId: friend.id },
+            { senderId: friend.id, receiverId: current.id }
+          ]
+        }
+      });
+    });
+  }
+
+  async listSocialConversation(publicId: string, friendPublicId: string, limit = 80): Promise<SocialMessageView[]> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    const friend = await this.resolvePlayerByPublicId(friendPublicId);
+    await this.ensureFriendshipByIds(current.id, friend.id);
+
+    const rows = await this.prisma.friendMessage.findMany({
+      where: {
+        OR: [
+          { senderId: current.id, receiverId: friend.id },
+          { senderId: friend.id, receiverId: current.id }
+        ]
+      },
+      orderBy: {
+        createdAt: "desc"
+      },
+      take: Math.max(1, Math.min(200, Math.floor(limit)))
+    });
+
+    return rows
+      .reverse()
+      .map((row) => ({
+        id: row.id,
+        fromPublicId: row.senderId === current.id ? current.publicId : friend.publicId,
+        toPublicId: row.receiverId === current.id ? current.publicId : friend.publicId,
+        text: row.text,
+        createdAt: row.createdAt.getTime(),
+        read: Boolean(row.readAt)
+      }));
+  }
+
+  async sendSocialMessage(publicId: string, friendPublicId: string, text: string): Promise<SocialMessageView[]> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    const friend = await this.resolvePlayerByPublicId(friendPublicId);
+    await this.ensureFriendshipByIds(current.id, friend.id);
+
+    const normalizedText = text.trim();
+    if (!normalizedText) {
+      return this.listSocialConversation(publicId, friendPublicId);
+    }
+
+    await this.prisma.friendMessage.create({
+      data: {
+        senderId: current.id,
+        receiverId: friend.id,
+        text: normalizedText.slice(0, 600)
+      }
+    });
+
+    return this.listSocialConversation(publicId, friendPublicId);
+  }
+
+  async markSocialConversationRead(publicId: string, friendPublicId: string): Promise<void> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    const friend = await this.resolvePlayerByPublicId(friendPublicId);
+    await this.ensureFriendshipByIds(current.id, friend.id);
+
+    await this.prisma.friendMessage.updateMany({
+      where: {
+        senderId: friend.id,
+        receiverId: current.id,
+        readAt: null
+      },
+      data: {
+        readAt: new Date()
+      }
+    });
+  }
+
+  async getSocialRanking(publicId: string, onlinePlayerIds: ReadonlySet<string>): Promise<SocialRankingSummary> {
+    const current = await this.resolvePlayerByPublicId(publicId);
+    await this.prisma.player.update({
+      where: { id: current.id },
+      data: { lastSeenAt: new Date() }
+    });
+    const topRows = await this.prisma.player.findMany({
+      select: {
+        id: true,
+        publicId: true,
+        username: true,
+        winsPvp: true,
+        level: true,
+        lastSeenAt: true
+      },
+      orderBy: [{ winsPvp: "desc" }, { level: "desc" }, { username: "asc" }],
+      take: 100
+    });
+
+    const global = topRows.map((row, index) => ({
+      position: index + 1,
+      publicId: row.publicId,
+      username: row.username,
+      winsPvp: row.winsPvp,
+      level: row.level,
+      online: this.toSocialPresence(row.publicId, onlinePlayerIds, row.lastSeenAt) !== "OFFLINE",
+      isCurrentUser: row.publicId === current.publicId
+    }));
+
+    const friendships = await this.prisma.friendship.findMany({
+      where: {
+        OR: [{ playerAId: current.id }, { playerBId: current.id }]
+      },
+      select: {
+        playerAId: true,
+        playerBId: true
+      }
+    });
+
+    const friendIds = friendships.map((row) => (row.playerAId === current.id ? row.playerBId : row.playerAId));
+    const friendRows = await this.prisma.player.findMany({
+      where: {
+        id: {
+          in: Array.from(new Set([current.id, ...friendIds]))
+        }
+      },
+      select: {
+        publicId: true,
+        username: true,
+        winsPvp: true,
+        level: true,
+        lastSeenAt: true
+      },
+      orderBy: [{ winsPvp: "desc" }, { level: "desc" }, { username: "asc" }]
+    });
+
+    const friends = friendRows.map((row, index) => ({
+      position: index + 1,
+      publicId: row.publicId,
+      username: row.username,
+      winsPvp: row.winsPvp,
+      level: row.level,
+      online: this.toSocialPresence(row.publicId, onlinePlayerIds, row.lastSeenAt) !== "OFFLINE",
+      isCurrentUser: row.publicId === current.publicId
+    }));
+
+    return { global, friends };
   }
 
   async listDecks(publicId: string): Promise<DeckListSummary> {
@@ -2137,7 +2716,6 @@ export class PersistenceService {
       });
 
       await this.grantXp(tx, player.id, SHOP_PURCHASE_XP_GAIN);
-      await this.applyProgressEvents(tx, player.id, [{ key: "SHOP_BUY", amount: 1 }]);
       await this.evaluateAchievements(tx, player.id);
 
       const refreshedPlayer = await tx.player.findUnique({
@@ -2361,7 +2939,6 @@ export class PersistenceService {
       }
 
       await this.grantXp(tx, player.id, BOOSTER_CARD_XP_GAIN * rewards.length);
-      await this.applyProgressEvents(tx, player.id, [{ key: "SHOP_BUY", amount: 1 }]);
       await this.evaluateAchievements(tx, player.id);
 
       const refreshedPlayer = await tx.player.findUnique({
@@ -2463,7 +3040,6 @@ export class PersistenceService {
 
       await this.prisma.$transaction(async (tx) => {
         await this.grantXp(tx, playerId, FUSION_DISCOVERY_XP_GAIN);
-        await this.applyProgressEvents(tx, playerId, [{ key: "FUSION_DISCOVERY", amount: 1 }]);
         await this.evaluateAchievements(tx, playerId);
       });
       return;
@@ -2779,10 +3355,6 @@ export class PersistenceService {
         });
 
         await this.grantXp(tx, player.id, xpRewardForPveLoss(npc.tier));
-        await this.applyProgressEvents(tx, player.id, [
-          { key: "PVE_PLAY", amount: 1 },
-          { key: "DUEL_PLAY", amount: 1 }
-        ]);
         await this.evaluateAchievements(tx, player.id);
         return;
       }
@@ -2818,11 +3390,6 @@ export class PersistenceService {
       }
 
       await this.grantXp(tx, player.id, xpRewardForPveWin(npc.tier));
-      await this.applyProgressEvents(tx, player.id, [
-        { key: "PVE_PLAY", amount: 1 },
-        { key: "PVE_WIN", amount: 1 },
-        { key: "DUEL_PLAY", amount: 1 }
-      ]);
       await this.evaluateAchievements(tx, player.id);
     });
 
@@ -2955,16 +3522,6 @@ export class PersistenceService {
       await this.grantXp(tx, winner.id, xpRewardForPvpWin());
       await this.grantXp(tx, loser.id, xpRewardForPvpLoss());
 
-      await this.applyProgressEvents(tx, winner.id, [
-        { key: "PVP_PLAY", amount: 1 },
-        { key: "PVP_WIN", amount: 1 },
-        { key: "DUEL_PLAY", amount: 1 }
-      ]);
-      await this.applyProgressEvents(tx, loser.id, [
-        { key: "PVP_PLAY", amount: 1 },
-        { key: "DUEL_PLAY", amount: 1 }
-      ]);
-
       await this.evaluateAchievements(tx, winner.id);
       await this.evaluateAchievements(tx, loser.id);
     });
@@ -2972,12 +3529,14 @@ export class PersistenceService {
 }
 
 export type {
+  AchievementDashboardEntry,
+  AchievementDashboardSummary,
   BoosterPackType,
   CollectionEntry,
   DeckListSummary,
+  PlayerTitleView,
   PlayerSummary,
   PlayerAchievementView,
-  PlayerDailyMissionView,
   ProgressionSummary,
   PveNpcView,
   PveDropProgressView,
@@ -2987,5 +3546,10 @@ export type {
   ShopListSummary,
   ShopOfferView,
   ShopPurchaseSummary,
-  ShopRerollSummary
+  ShopRerollSummary,
+  SocialMessageView,
+  SocialRankingEntry,
+  SocialRankingSummary,
+  SocialSnapshotSummary,
+  SocialUserView
 };

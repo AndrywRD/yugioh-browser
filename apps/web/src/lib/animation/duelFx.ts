@@ -1,7 +1,8 @@
 import { gsap } from "gsap";
 
 const CARD_BACK_PATH = "/images/cartas/Back-FMR-EN-VG.png";
-const FX_SLOW_FACTOR = 1.28;
+const FX_SLOW_FACTOR = 1.38;
+const FM_IMPACT_HOLD_MS = 96;
 
 function slowSec(value: number): number {
   return value * FX_SLOW_FACTOR;
@@ -9,6 +10,12 @@ function slowSec(value: number): number {
 
 function slowMs(value: number): number {
   return Math.round(value * FX_SLOW_FACTOR);
+}
+
+function normalizeVector(x: number, y: number): { x: number; y: number } {
+  const len = Math.hypot(x, y);
+  if (len <= 0.0001) return { x: 0, y: 0 };
+  return { x: x / len, y: y / len };
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -145,7 +152,7 @@ export async function impactFrames(
 
   await playTimeline(tl);
   cleanupNode(flash);
-  await new Promise((resolve) => window.setTimeout(resolve, slowMs(100)));
+  await new Promise((resolve) => window.setTimeout(resolve, slowMs(FM_IMPACT_HOLD_MS)));
 }
 
 export function damageFloater(
@@ -166,20 +173,22 @@ export function damageFloater(
   node.style.top = `${c.y}px`;
   root.appendChild(node);
 
+  const driftX = (Math.random() - 0.5) * 14;
   gsap.fromTo(
     node,
-    { opacity: 0, scale: 0.72, x: 0, y: 0 },
+    { opacity: 0, scale: 0.68, x: 0, y: 10 },
     {
       opacity: 1,
-      scale: 1.08,
-      duration: slowSec(0.14),
-      ease: "back.out(1.25)",
+      scale: 1.1,
+      duration: slowSec(0.16),
+      ease: "back.out(1.35)",
       onComplete: () => {
         gsap.to(node, {
-          y: -42,
+          x: driftX,
+          y: -48,
           opacity: 0,
-          scale: 0.92,
-          duration: slowSec(0.54),
+          scale: 0.9,
+          duration: slowSec(0.6),
           ease: "power2.out",
           onComplete: () => cleanupNode(node)
         });
@@ -200,7 +209,9 @@ export async function attackDash(
   if (!root) return;
   const start = center(opts.attackerRect);
   const end = center(opts.targetRect);
+  const dir = normalizeVector(end.x - start.x, end.y - start.y);
   const stop = { x: start.x + (end.x - start.x) * 0.75, y: start.y + (end.y - start.y) * 0.75 };
+  const anticipation = { x: -dir.x * 18, y: -dir.y * 18 };
   const ghost = createGhostCard(opts.attackerRect, opts.attackerImagePath);
   root.appendChild(ghost);
 
@@ -232,7 +243,19 @@ export async function attackDash(
     {
       strokeDashoffset: 0,
       opacity: 1,
-      duration: slowSec(0.24),
+      duration: slowSec(0.28),
+      ease: "power2.out"
+    },
+    0
+  );
+  tl.to(
+    ghost,
+    {
+      x: anticipation.x,
+      y: anticipation.y,
+      scale: 0.97,
+      rotation: -3,
+      duration: slowSec(0.1),
       ease: "power2.out"
     },
     0
@@ -243,11 +266,18 @@ export async function attackDash(
       x: stop.x - start.x,
       y: stop.y - start.y,
       scale: 1.06,
-      rotation: 2,
-      duration: slowSec(0.27),
+      rotation: 3,
+      duration: slowSec(0.31),
       ease: "expo.out"
     },
-    0
+    slowSec(0.08)
+  );
+  tl.call(
+    () => {
+      spawnDustBurst(root, stop.x, stop.y, 10);
+    },
+    undefined,
+    slowSec(0.38)
   );
   tl.to(
     ghost,
@@ -256,22 +286,23 @@ export async function attackDash(
       y: 0,
       scale: 1,
       rotation: 0,
-      duration: slowSec(0.24),
+      duration: slowSec(0.28),
       ease: "back.out(1.2)"
     },
-    slowSec(0.3)
+    slowSec(0.4)
   );
   tl.to(
     line,
     {
       opacity: 0,
-      duration: slowSec(0.16),
+      duration: slowSec(0.2),
       ease: "power1.out"
     },
-    slowSec(0.3)
+    slowSec(0.4)
   );
 
   await playTimeline(tl);
+  await new Promise((resolve) => window.setTimeout(resolve, slowMs(30)));
   cleanupNode(ghost);
   cleanupNode(trail);
 }
@@ -318,15 +349,22 @@ export async function summonToField(
       opacity: 1,
       x: end.x - start.x,
       y: end.y - start.y,
-      scale: 1.05,
+      scale: 1.08,
       rotation: 1,
-      duration: slowSec(0.52),
+      duration: slowSec(0.62),
       ease: "expo.out"
     },
     slowSec(0.02)
   );
-  tl.to(ghost, { scale: 1, rotation: 0, duration: slowSec(0.14), ease: "back.out(1.25)" }, slowSec(0.54));
-  tl.to([rune, glow], { opacity: 0, duration: slowSec(0.2), ease: "power2.in" }, slowSec(0.62));
+  tl.call(
+    () => {
+      spawnDustBurst(root, end.x, end.y, 12);
+    },
+    undefined,
+    slowSec(0.54)
+  );
+  tl.to(ghost, { scale: 1, rotation: 0, duration: slowSec(0.18), ease: "back.out(1.28)" }, slowSec(0.58));
+  tl.to([rune, glow], { opacity: 0, duration: slowSec(0.24), ease: "power2.in" }, slowSec(0.7));
 
   await playTimeline(tl);
   cleanupNode(ghost);
@@ -368,8 +406,10 @@ export async function flipReveal(
   gsap.set(edge, { opacity: 0 });
 
   const tl = gsap.timeline({ paused: true });
-  tl.to(inner, { rotationY: 90, duration: slowSec(0.18), ease: "power2.inOut" }, 0);
-  tl.to(inner, { rotationY: 180, duration: slowSec(0.18), ease: "power2.inOut" }, slowSec(0.18));
+  tl.to(inner, { y: -8, scale: 1.03, duration: slowSec(0.1), ease: "power2.out" }, 0);
+  tl.to(inner, { rotationY: 90, duration: slowSec(0.2), ease: "power2.inOut" }, 0);
+  tl.to(inner, { rotationY: 180, duration: slowSec(0.2), ease: "power2.inOut" }, slowSec(0.2));
+  tl.to(inner, { y: 0, scale: 1, duration: slowSec(0.14), ease: "back.out(1.2)" }, slowSec(0.28));
   tl.to(edge, { opacity: 0.62, scale: 1.04, duration: slowSec(0.12), ease: "power2.out" }, slowSec(0.28));
   tl.to(edge, { opacity: 0, scale: 1.22, duration: slowSec(0.18), ease: "power2.in" }, slowSec(0.4));
 
@@ -406,7 +446,11 @@ export async function linkBeam(
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", `M ${from.x} ${from.y} Q ${cx} ${cy} ${to.x} ${to.y}`);
   path.setAttribute("class", "duel-fx-beam-path");
+  const core = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  core.setAttribute("d", `M ${from.x} ${from.y} Q ${cx} ${cy} ${to.x} ${to.y}`);
+  core.setAttribute("class", "duel-fx-beam-path-core");
   svg.appendChild(path);
+  svg.appendChild(core);
   root.appendChild(svg);
 
   const targetPulse = createPulse(to.x, to.y, 120, "duel-fx-beam-target vfx-additive");
@@ -416,6 +460,8 @@ export async function linkBeam(
   const length = path.getTotalLength();
   path.style.strokeDasharray = `${length}`;
   path.style.strokeDashoffset = `${length}`;
+  core.style.strokeDasharray = `${length}`;
+  core.style.strokeDashoffset = `${length}`;
 
   const tl = gsap.timeline({ paused: true });
   tl.to(
@@ -423,21 +469,31 @@ export async function linkBeam(
     {
       strokeDashoffset: 0,
       opacity: 1,
-      duration: slowSec(0.22),
+      duration: slowSec(0.26),
       ease: "power2.out"
     },
     0
   );
+  tl.to(
+    core,
+    {
+      strokeDashoffset: 0,
+      opacity: 1,
+      duration: slowSec(0.2),
+      ease: "power2.out"
+    },
+    slowSec(0.03)
+  );
   tl.to(targetPulse, { opacity: 0.72, scale: 1, duration: slowSec(0.18), ease: "power2.out" }, slowSec(0.16));
   tl.to(targetPulse, { opacity: 0, scale: 1.26, duration: slowSec(0.2), ease: "power2.in" }, slowSec(0.34));
-  tl.to(path, { opacity: 0, duration: slowSec(0.18), ease: "power2.in" }, slowSec(0.3));
+  tl.to([path, core], { opacity: 0, duration: slowSec(0.2), ease: "power2.in" }, slowSec(0.32));
 
   await playTimeline(tl);
   cleanupNode(svg);
   cleanupNode(targetPulse);
 }
 
-export async function sendToGrave(
+async function sendToGrave(
   overlayRoot: HTMLElement | null,
   opts: {
     cardRect: DOMRect;
@@ -515,7 +571,7 @@ export async function sendToGrave(
   cleanupNode(trail);
 }
 
-export async function destroyCard(
+async function destroyCard(
   overlayRoot: HTMLElement | null,
   opts: {
     cardRect: DOMRect;
@@ -558,7 +614,7 @@ export async function destroyCard(
   cleanupNode(ghost);
 }
 
-export async function banishCard(
+async function banishCard(
   overlayRoot: HTMLElement | null,
   opts: {
     cardRect: DOMRect;
@@ -613,7 +669,7 @@ export async function banishCard(
   cleanupNode(sigil);
 }
 
-export async function playTurnBanner(
+async function playTurnBanner(
   overlayRoot: HTMLElement | null,
   opts: {
     side: "player" | "enemy";
@@ -659,7 +715,7 @@ export async function playTurnBanner(
   cleanupNode(banner);
 }
 
-export async function drawToHand(
+async function drawToHand(
   overlayRoot: HTMLElement | null,
   opts: {
     deckRect: DOMRect;
@@ -705,7 +761,7 @@ export async function drawToHand(
   cleanupNode(handGlow);
 }
 
-export async function addToHand(
+async function addToHand(
   overlayRoot: HTMLElement | null,
   opts: {
     fromRect: DOMRect;
@@ -725,12 +781,6 @@ export async function addToHand(
 }
 
 export const duelFx = {
-  sendToGrave,
-  destroyCard,
-  banishCard,
-  playTurnBanner,
-  drawToHand,
-  addToHand,
   impactFrames,
   damageFloater,
   attackDash,
