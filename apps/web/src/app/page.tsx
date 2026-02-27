@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Deck } from "@ruptura-arcana/shared";
 import {
   clearStoredPublicId,
-  type CollectionEntry,
   fetchCollection,
   fetchDecks,
   fetchFusionLog,
@@ -16,7 +15,6 @@ import {
   type LevelProgress,
   loginAccount,
   fetchSocialSnapshot,
-  type PlayerAchievement,
   type DeckListResponse,
   type PlayerProfile,
   type PveNpc,
@@ -72,9 +70,7 @@ export default function LobbyPage() {
   const [player, setPlayer] = useState<PlayerProfile | null>(null);
   const [decks, setDecks] = useState<DeckListResponse>({ decks: [], activeDeckId: null });
   const [npcs, setNpcs] = useState<PveNpc[]>([]);
-  const [collectionEntries, setCollectionEntries] = useState<CollectionEntry[]>([]);
   const [levelProgress, setLevelProgress] = useState<LevelProgress | null>(null);
-  const [achievements, setAchievements] = useState<PlayerAchievement[]>([]);
   const [collectionCount, setCollectionCount] = useState(0);
   const [fusionCount, setFusionCount] = useState(0);
   const [busyNpcId, setBusyNpcId] = useState<string | null>(null);
@@ -106,13 +102,11 @@ export default function LobbyPage() {
     payload: {
       player: PlayerProfile;
       levelProgress: LevelProgress;
-      achievements: PlayerAchievement[];
     },
     options?: { announceLevelUp?: boolean; previousLevel?: number }
   ) => {
     setPlayer(payload.player);
     setLevelProgress(payload.levelProgress);
-    setAchievements(payload.achievements);
 
     if (options?.announceLevelUp && typeof options.previousLevel === "number" && payload.player.level > options.previousLevel) {
       pushTicker(`Level UP! ${options.previousLevel} -> ${payload.player.level}`, "success");
@@ -122,10 +116,8 @@ export default function LobbyPage() {
   const resetLobbyState = () => {
     setPlayer(null);
     setLevelProgress(null);
-    setAchievements([]);
     setDecks({ decks: [], activeDeckId: null });
     setNpcs([]);
-    setCollectionEntries([]);
     setCollectionCount(0);
     setFusionCount(0);
     setBusyNpcId(null);
@@ -152,13 +144,11 @@ export default function LobbyPage() {
 
     applyProgressionState({
       player: progression.player,
-      levelProgress: progression.levelProgress,
-      achievements: progression.achievements
+      levelProgress: progression.levelProgress
     });
 
     setDecks(deckPayload);
     setNpcs(npcPayload);
-    setCollectionEntries(collection);
     setCollectionCount(collection.reduce((acc, entry) => acc + entry.count, 0));
     setFusionCount(fusionLog.length);
     await refreshSocialBadge(publicId);
@@ -494,7 +484,6 @@ export default function LobbyPage() {
         loading={loading}
         decks={decks}
         levelProgress={levelProgress}
-        achievements={achievements}
         onSetActiveDeck={(deckId) => void handleSetActiveDeck(deckId)}
         onLogout={handleLogout}
         uiPreferences={uiPreferences}

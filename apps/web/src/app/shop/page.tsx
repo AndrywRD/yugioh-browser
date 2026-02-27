@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   clearStoredPublicId,
-  fetchCollection,
   fetchProgression,
   fetchShopConfig,
   fetchShopOffers,
@@ -13,7 +12,6 @@ import {
   purchaseShopCard,
   rerollShopOffers,
   type BoosterPackType,
-  type CollectionEntry,
   type PlayerProfile,
   type ShopConfig,
   type ShopMeta,
@@ -29,7 +27,6 @@ export default function ShopPage() {
   const [offers, setOffers] = useState<ShopOffer[]>([]);
   const [shopMeta, setShopMeta] = useState<ShopMeta | null>(null);
   const [shopConfig, setShopConfig] = useState<ShopConfig | null>(null);
-  const [collectionEntries, setCollectionEntries] = useState<CollectionEntry[]>([]);
   const [buyingCardId, setBuyingCardId] = useState<string | null>(null);
   const [rerollingShop, setRerollingShop] = useState(false);
   const [openingBoosterType, setOpeningBoosterType] = useState<BoosterPackType | null>(null);
@@ -38,17 +35,15 @@ export default function ShopPage() {
     setLoading(true);
     setError("");
     try {
-      const [progression, shop, config, collection] = await Promise.all([
+      const [progression, shop, config] = await Promise.all([
         fetchProgression(publicId),
         fetchShopOffers(publicId, 20),
-        fetchShopConfig().catch(() => null),
-        fetchCollection(publicId).catch(() => [])
+        fetchShopConfig().catch(() => null)
       ]);
       setPlayer(progression.player);
       setOffers(shop.offers);
       setShopMeta(shop.meta ?? null);
       setShopConfig(config);
-      setCollectionEntries(collection);
     } finally {
       setLoading(false);
     }
@@ -80,31 +75,6 @@ export default function ShopPage() {
       setError("");
       const result = await purchaseShopCard(player.publicId, cardId);
       setPlayer(result.player);
-      setCollectionEntries((current) => {
-        const found = current.find((entry) => entry.cardId === cardId);
-        if (found) {
-          return current.map((entry) => (entry.cardId === cardId ? { ...entry, count: entry.count + 1 } : entry));
-        }
-        const purchasedOffer = offers.find((offer) => offer.cardId === cardId);
-        if (!purchasedOffer) return current;
-        return [
-          ...current,
-          {
-            cardId,
-            count: 1,
-            name: purchasedOffer.name,
-            kind: purchasedOffer.kind,
-            atk: purchasedOffer.atk,
-            def: purchasedOffer.def,
-            tags: purchasedOffer.tags,
-            effectDescription: purchasedOffer.effectDescription,
-            imagePath: purchasedOffer.imagePath,
-            password: purchasedOffer.password,
-            cost: purchasedOffer.cost,
-            catalogNumber: purchasedOffer.catalogNumber
-          }
-        ];
-      });
       const latestShop = await fetchShopOffers(player.publicId, 20);
       setOffers(latestShop.offers);
       setShopMeta(latestShop.meta);
@@ -142,29 +112,6 @@ export default function ShopPage() {
       setError("");
       const result = await openShopBooster(player.publicId, packType);
       setPlayer(result.player);
-      setCollectionEntries((current) => {
-        const map = new Map(current.map((entry) => [entry.cardId, { ...entry }]));
-        for (const card of result.cards) {
-          const existing = map.get(card.cardId);
-          if (existing) {
-            existing.count += 1;
-            map.set(card.cardId, existing);
-          } else {
-            map.set(card.cardId, {
-              cardId: card.cardId,
-              count: 1,
-              name: card.name,
-              kind: card.kind,
-              atk: card.atk,
-              def: card.def,
-              tags: card.tags,
-              effectDescription: card.effectDescription,
-              imagePath: card.imagePath
-            });
-          }
-        }
-        return Array.from(map.values());
-      });
       const latestShop = await fetchShopOffers(player.publicId, 20);
       setOffers(latestShop.offers);
       setShopMeta(latestShop.meta);

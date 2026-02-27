@@ -113,25 +113,6 @@ export default function FusionLogPage() {
     return Array.from(tagSet).sort((a, b) => a.localeCompare(b));
   }, [discoveries]);
 
-  const fusionSummary = useMemo(() => {
-    const uniqueResults = new Set(discoveries.map((item) => item.resultCardId)).size;
-    const totalAttemptsRecorded = discoveries.reduce((acc, item) => acc + Math.max(1, item.times), 0);
-    const avgMaterials =
-      discoveries.length > 0
-        ? discoveries.reduce((acc, item) => acc + item.materialsCount, 0) / discoveries.length
-        : 0;
-    const latest = discoveries.reduce<FusionDiscoveryEntry | null>((current, item) => {
-      if (!current) return item;
-      return item.discoveredAt > current.discoveredAt ? item : current;
-    }, null);
-    return {
-      uniqueResults,
-      totalAttemptsRecorded,
-      avgMaterials,
-      latest
-    };
-  }, [discoveries]);
-
   const updateLabSlot = (slotIndex: 0 | 1 | 2, value: string) => {
     setLabSlots((current) => {
       const next: [string, string, string] = [...current] as [string, string, string];

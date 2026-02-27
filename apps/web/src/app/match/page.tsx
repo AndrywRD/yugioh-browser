@@ -216,10 +216,6 @@ function resolveSideToHud(side: BoardSide): "YOU" | "OPP" {
   return side === "PLAYER" ? "YOU" : "OPP";
 }
 
-function resolveGraveZoneRectId(side: BoardSide): "zone:grave:player" | "zone:grave:enemy" {
-  return side === "PLAYER" ? "zone:grave:player" : "zone:grave:enemy";
-}
-
 function resolveDirectAttackCenterRect(attackerSide: BoardSide, boardRoot: HTMLElement | null): DOMRect | null {
   if (!boardRoot) return null;
   const boardRect = boardRoot.getBoundingClientRect();
@@ -242,11 +238,6 @@ function uniqueMarkers(markers: SlotMarker[]): SlotMarker[] {
   }
 
   return result;
-}
-
-function withTimestamp(message: string): string {
-  const time = new Date().toLocaleTimeString("pt-BR", { hour12: false });
-  return `${time} | ${message}`;
 }
 
 function isTextInputActive(): boolean {
@@ -309,65 +300,6 @@ function resolveDuelOutcome(snapshot: GameStateForClient | null, playerId: strin
   return snapshot.you.lp > snapshot.opponent.lp ? "VICTORY" : "DEFEAT";
 }
 
-function eventToText(event: GameEvent, playerId: string | null): string {
-  const actor = event.playerId ? (event.playerId === playerId ? "Voce" : "Oponente") : "Sistema";
-  const payload = (event.payload ?? {}) as Record<string, unknown>;
-
-  if (event.type === "MONSTER_SUMMONED") {
-    return `${actor} invocou no Slot ${(Number(payload.slot) ?? 0) + 1}.`;
-  }
-  if (event.type === "MONSTER_FLIP_SUMMONED") {
-    return `${actor} fez Flip Summon no Slot ${(Number(payload.slot) ?? 0) + 1}.`;
-  }
-  if (event.type === "FUSION_RESOLVED") {
-    const resultName = typeof payload.resultName === "string" ? payload.resultName : "resultado desconhecido";
-    return `${actor} concluiu uma fusao e invocou ${resultName}.`;
-  }
-  if (event.type === "FUSION_FAILED") {
-    return `${actor} tentou fusao e gerou um resultado instavel.`;
-  }
-  if (event.type === "MONSTER_REVEALED") {
-    const revealedName = typeof payload.name === "string" ? payload.name : "monstro";
-    const slot = typeof payload.slot === "number" ? payload.slot + 1 : "?";
-    return `${actor} revelou ${revealedName} no Slot ${slot}.`;
-  }
-  if (event.type === "MONSTER_REHIDDEN") {
-    return `${actor} re-ocultou o defensor no Slot ${(Number(payload.slot) ?? 0) + 1}.`;
-  }
-  if (event.type === "POSITION_CHANGED") {
-    return `${actor} mudou posicao no Slot ${(Number(payload.slot) ?? 0) + 1}.`;
-  }
-  if (event.type === "ATTACK_DECLARED") {
-    return `${actor} declarou ataque com o Slot ${(Number(payload.attackerSlot) ?? 0) + 1}.`;
-  }
-  if (event.type === "ATTACK_WAITING_RESPONSE") {
-    return "Janela de resposta aberta: defensor pode ativar armadilha.";
-  }
-  if (event.type === "ATTACK_NEGATED") {
-    return "Ataque negado/cancelado por resposta.";
-  }
-  if (event.type === "BATTLE_RESOLVED") {
-    if (payload.mode === "DIRECT") {
-      return `${actor} causou ataque direto (${Number(payload.damage) || 0} de dano).`;
-    }
-    const slot = typeof payload.defenderSlot === "number" ? payload.defenderSlot + 1 : "?";
-    return `${actor} resolveu batalha contra o Slot ${slot}.`;
-  }
-  if (event.type === "LP_CHANGED") {
-    const lp = Number(payload.lp) || 0;
-    const delta = Number(payload.delta) || 0;
-    return `${actor} LP: ${lp} (${delta}).`;
-  }
-  if (event.type === "TURN_CHANGED") {
-    return `Turno ${Number(payload.turnNumber) || "?"}: ${actor}.`;
-  }
-  if (event.type === "GAME_FINISHED") {
-    return "Partida encerrada.";
-  }
-
-  return `${event.type}`;
-}
-
 function isEquipEffectKey(effectKey?: string): boolean {
   return effectKey === "EQUIP_CONTINUOUS" || effectKey === "EQUIP_BUFF_500";
 }
@@ -401,7 +333,6 @@ export default function HomePage() {
   const [joinCode, setJoinCode] = useState("");
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [snapshot, setSnapshot] = useState<GameStateForClient | null>(null);
-  const [logs, setLogs] = useState<string[]>([]);
   const [roomError, setRoomError] = useState("");
   const [gameError, setGameError] = useState("");
   const [deckSyncError, setDeckSyncError] = useState("");
@@ -422,7 +353,6 @@ export default function HomePage() {
   const [hitEffectSlot, setHitEffectSlot] = useState<SlotMarker | null>(null);
   const [slotFx, setSlotFx] = useState<SlotFx[]>([]);
   const [floatingDamages, setFloatingDamages] = useState<FloatingDamage[]>([]);
-  const [tickerLines, setTickerLines] = useState<string[]>([]);
   const [fusionLog, setFusionLog] = useState<FusionDiscoveryEntry[]>([]);
   const [showFusionLogModal, setShowFusionLogModal] = useState(false);
   const [showFusionLogPanel, setShowFusionLogPanel] = useState(false);
@@ -1169,10 +1099,6 @@ export default function HomePage() {
         }
       }
 
-      const translated = payload.events.map((event) => eventToText(event, playerId));
-      setLogs((prev) => [...translated.map((line) => withTimestamp(line)), ...prev].slice(0, 100));
-      setTickerLines((prev) => [...translated, ...prev].slice(0, 8));
-
       for (const event of payload.events) {
         if (tutorialLessonId && playerId) {
           if (tutorialLessonId === "1") {
@@ -1510,15 +1436,6 @@ export default function HomePage() {
     });
     socket.on("pve:result", (payload: PveResultPayload) => {
       setPveResultModal(payload);
-      const summary = payload.didWin
-        ? `Vitoria PVE! +${payload.rewardGold} gold | Drops: ${
-            payload.rewardCards
-              .map((drop) => `${CARD_INDEX[drop.cardId]?.name ?? drop.cardId} x${drop.count}`)
-              .join(", ") || "nenhum"
-          }.`
-        : "Derrota no duelo PVE.";
-      setLogs((prev) => [withTimestamp(summary), ...prev].slice(0, 100));
-      setTickerLines((prev) => [summary, ...prev].slice(0, 8));
 
       if (payload.didWin) {
         const dropPreview =
@@ -1765,7 +1682,6 @@ export default function HomePage() {
     setPreviewCard(null);
     setSlotFx([]);
     setFloatingDamages([]);
-    setTickerLines([]);
     setShowFusionLogModal(false);
     setShowFusionLogPanel(false);
     setFusionLogSearch("");
@@ -1853,8 +1769,6 @@ export default function HomePage() {
     setRematchBusy(true);
     setEndScreenDismissed(true);
     setPveResultModal(null);
-    setLogs((current) => [withTimestamp("Solicitando revanche..."), ...current].slice(0, 100));
-    setTickerLines((current) => ["Solicitando revanche...", ...current].slice(0, 8));
     socket.emit("room:start", {});
   };
 
@@ -2722,7 +2636,7 @@ export default function HomePage() {
                       {interaction.kind === "fusion_selectMaterials" && (
                         <>
                           <span className="rounded bg-amber-900/50 px-2 py-1 text-amber-100">
-                            Materiais: {interaction.materials.map((material, index) => `${index + 1}`).join(" ") || "-"}
+                            Materiais: {interaction.materials.map((_, index) => `${index + 1}`).join(" ") || "-"}
                           </span>
                           <button
                             type="button"
@@ -2870,7 +2784,6 @@ export default function HomePage() {
             <PveDropsModal
               visible={Boolean(pveResultModal)}
               didWin={Boolean(pveResultModal?.didWin)}
-              npcId={pveResultModal?.npcId ?? ""}
               rewardGold={pveResultModal?.rewardGold ?? 0}
               rewardCards={pveResultModal?.rewardCards ?? []}
               onLeave={returnToHome}

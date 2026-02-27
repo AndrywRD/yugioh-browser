@@ -159,8 +159,8 @@ export default function DeckBuilderPage() {
   const [, setActionLogs] = useState<string[]>([]);
   const [saveError, setSaveError] = useState("");
 
-  const [feedback, setFeedback] = useState("");
-  const [syncError, setSyncError] = useState("");
+  const [, setFeedback] = useState("");
+  const [, setSyncError] = useState("");
   const [brokenImageIds, setBrokenImageIds] = useState<Record<string, true>>({});
   const [publicId, setPublicId] = useState<string | null>(null);
   const [ownedCollection, setOwnedCollection] = useState<CollectionEntry[]>([]);
@@ -204,8 +204,6 @@ export default function DeckBuilderPage() {
       .filter((entry) => entry.count > 0)
       .map((entry) => toDeckBuilderCard(entry));
   }, [ownedCollection]);
-
-  const ownedCopiesTotal = useMemo(() => ownedCollection.reduce((sum, entry) => sum + entry.count, 0), [ownedCollection]);
 
   const tagOptions = useMemo(() => {
     return Array.from(new Set(ownedCards.flatMap((card) => card.tags))).sort((a, b) => a.localeCompare(b));

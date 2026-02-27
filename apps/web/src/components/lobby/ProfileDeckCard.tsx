@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { FaChartLine, FaCoins, FaCrosshairs, FaUserGroup } from "react-icons/fa6";
+import { CARD_INDEX } from "@ruptura-arcana/game";
+import { FaChartLine, FaCoins, FaCrosshairs, FaStore, FaUserGroup } from "react-icons/fa6";
 import type { DeckListResponse, LevelProgress, PlayerProfile } from "../../lib/api";
 import { GameCard } from "./GameCard";
 import { DeckCoverPicker } from "../deck/DeckCoverPicker";
@@ -14,6 +15,9 @@ interface ProfileDeckCardProps {
   onLogout: () => void;
 }
 
+const CARD_TRADE_HIGHLIGHT_NAMES = ["Pendulum Machine", "Invigoration", "Elf's Light"];
+const CARD_TRADE_HIGHLIGHT_PRICES = [1190, 1435, 1435];
+
 export function ProfileDeckCard({
   loading,
   player,
@@ -24,6 +28,34 @@ export function ProfileDeckCard({
 }: ProfileDeckCardProps) {
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
   const activeDeck = useMemo(() => decks.decks.find((deck) => deck.id === decks.activeDeckId) ?? null, [decks.activeDeckId, decks.decks]);
+  const cardTradeHighlights = useMemo(() => {
+    const catalogCards = Object.values(CARD_INDEX);
+    const usedIds = new Set<string>();
+    const selectedCards = CARD_TRADE_HIGHLIGHT_NAMES.map((cardName) =>
+      catalogCards.find((card) => card.name.toLowerCase() === cardName.toLowerCase())
+    ).filter((card): card is (typeof catalogCards)[number] => Boolean(card));
+
+    for (const card of selectedCards) {
+      usedIds.add(card.id);
+    }
+
+    if (selectedCards.length < 3) {
+      for (const card of catalogCards) {
+        if (usedIds.has(card.id)) continue;
+        selectedCards.push(card);
+        usedIds.add(card.id);
+        if (selectedCards.length === 3) break;
+      }
+    }
+
+    return selectedCards.slice(0, 3).map((card, index) => ({
+      id: card.id,
+      name: card.name,
+      imagePath: card.imagePath,
+      price: CARD_TRADE_HIGHLIGHT_PRICES[index] ?? 980
+    }));
+  }, []);
+
   const progressPercent = levelProgress
     ? Math.max(
         0,
@@ -115,6 +147,34 @@ export function ProfileDeckCard({
                 ))}
               </select>
             <DeckCoverPicker deck={activeDeck} className="mt-3" />
+          </div>
+
+          <div className="rounded-lg border border-slate-700/75 bg-slate-900/60 p-2.5">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-amber-100">Card Trade</p>
+                <p className="text-[11px] text-slate-300">Destaques para compra rapida</p>
+              </div>
+              <Link
+                href="/shop"
+                className="fm-button inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold whitespace-nowrap"
+              >
+                <FaStore className="h-3 w-3" />
+                Abrir Loja
+              </Link>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              {cardTradeHighlights.map((card) => (
+                <article key={card.id} className="rounded border border-amber-300/35 bg-slate-950/75 p-1.5">
+                  <div className="mx-auto aspect-[59/86] w-full max-w-[70px] overflow-hidden rounded border border-slate-700/80 bg-slate-900">
+                    {card.imagePath ? <img src={card.imagePath} alt={card.name} className="h-full w-full object-contain" loading="lazy" /> : null}
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-[10px] font-semibold text-slate-100">{card.name}</p>
+                  <p className="mt-1 text-[10px] font-semibold text-amber-100">{card.price.toLocaleString("pt-BR")}g</p>
+                </article>
+              ))}
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2">

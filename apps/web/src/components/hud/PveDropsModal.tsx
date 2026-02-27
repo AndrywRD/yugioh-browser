@@ -12,7 +12,6 @@ interface PveRewardCard {
 interface PveDropsModalProps {
   visible: boolean;
   didWin: boolean;
-  npcId: string;
   rewardGold: number;
   rewardCards: PveRewardCard[];
   onLeave: () => void;
@@ -25,7 +24,6 @@ interface PveDropsModalProps {
 export function PveDropsModal({
   visible,
   didWin,
-  npcId,
   rewardGold,
   rewardCards,
   onLeave,

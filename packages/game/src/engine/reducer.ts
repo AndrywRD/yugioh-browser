@@ -132,7 +132,7 @@ function removeEquipBuffFromTarget(player: ReturnType<typeof getPlayer>, card: S
   target.defModifier -= card.equipDefBoost ?? 0;
 }
 
-function moveSpellTrapToGrave(state: GameState, player: ReturnType<typeof getPlayer>, slot: number): string | null {
+function moveSpellTrapToGrave(_state: GameState, player: ReturnType<typeof getPlayer>, slot: number): string | null {
   const card = player.spellTrapZone[slot];
   if (!card) return null;
   removeEquipBuffFromTarget(player, card);
@@ -141,12 +141,12 @@ function moveSpellTrapToGrave(state: GameState, player: ReturnType<typeof getPla
   return card.instanceId;
 }
 
-function destroyEquipsAttachedToMonster(state: GameState, player: ReturnType<typeof getPlayer>, monsterInstanceId: string): void {
+function destroyEquipsAttachedToMonster(_state: GameState, player: ReturnType<typeof getPlayer>, monsterInstanceId: string): void {
   for (let slot = 0; slot < player.spellTrapZone.length; slot += 1) {
     const card = player.spellTrapZone[slot];
     if (!card || !card.continuous) continue;
     if (card.equipTargetInstanceId !== monsterInstanceId) continue;
-    moveSpellTrapToGrave(state, player, slot);
+    moveSpellTrapToGrave(_state, player, slot);
   }
 }
 

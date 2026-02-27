@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { DeckListResponse, LevelProgress, PlayerAchievement, PlayerProfile } from "../../lib/api";
+import type { DeckListResponse, LevelProgress, PlayerProfile } from "../../lib/api";
 import type { UiPreferences, UiScale } from "../../lib/uiPreferences";
 import { DeckCoverPicker } from "../deck/DeckCoverPicker";
 import { GameCard } from "./GameCard";
@@ -11,7 +11,6 @@ interface ProfilePanelProps {
   loading: boolean;
   decks: DeckListResponse;
   levelProgress: LevelProgress | null;
-  achievements: PlayerAchievement[];
   onSetActiveDeck: (deckId: string) => void;
   onLogout: () => void;
   uiPreferences: UiPreferences;
@@ -51,7 +50,6 @@ export function ProfilePanel({
   loading,
   decks,
   levelProgress,
-  achievements,
   onSetActiveDeck,
   onLogout,
   uiPreferences,
